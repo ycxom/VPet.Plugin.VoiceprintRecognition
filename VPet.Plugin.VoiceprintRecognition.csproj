@@ -1,0 +1,58 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <OutputType>Library</OutputType>
+    <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+    <UseWPF>true</UseWPF>
+    <ImportWindowsDesktopTargets>true</ImportWindowsDesktopTargets>
+    <Nullable>disable</Nullable>
+    <PlatformTarget>AnyCPU</PlatformTarget>
+    <LangVersion>11.0</LangVersion>
+    <RootNamespace>VPet.Plugin.VoiceprintRecognition</RootNamespace>
+    <AssemblyName>VPet.Plugin.VoiceprintRecognition</AssemblyName>
+    <!-- 确保所有依赖都被复制到输出目录 -->
+    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
+  </PropertyGroup>
+
+  <!-- 排除发布目录 -->
+  <ItemGroup>
+    <Compile Remove="1103_VoiceprintRecognition\**" />
+    <EmbeddedResource Remove="1103_VoiceprintRecognition\**" />
+    <Page Remove="1103_VoiceprintRecognition\**" />
+    <None Include="1103_VoiceprintRecognition\**" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- VPet 核心依赖 -->
+    <PackageReference Include="VPet-Simulator.Core" Version="1.1.0.58" />
+    <PackageReference Include="VPet-Simulator.Windows.Interface" Version="1.1.0.58" />
+
+    <!-- UI 组件 -->
+    <PackageReference Include="Panuon.WPF" Version="1.1.3" />
+    <PackageReference Include="Panuon.WPF.UI" Version="1.2.4.10" />
+    <PackageReference Include="LinePutScript.Localization.WPF" Version="1.0.7" />
+
+    <!-- ONNX Runtime - 声纹识别核心 -->
+    <PackageReference Include="Microsoft.ML.OnnxRuntime" Version="1.16.3" />
+    <PackageReference Include="Microsoft.ML.OnnxRuntime.Managed" Version="1.16.3" />
+
+    <!-- 音频处理 -->
+    <PackageReference Include="NAudio" Version="2.2.1" />
+
+    <!-- JSON 序列化 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- 编译后自动复制 DLL 到 plugin 目录 -->
+  <Target Name="CopyToPlugin" AfterTargets="Build">
+    <MakeDir Directories="$(ProjectDir)1103_VoiceprintRecognition\plugin\" Condition="!Exists('$(ProjectDir)1103_VoiceprintRecognition\plugin\')" />
+    <MakeDir Directories="$(ProjectDir)1103_VoiceprintRecognition\models\" Condition="!Exists('$(ProjectDir)1103_VoiceprintRecognition\models\')" />
+    <ItemGroup>
+      <!-- 只复制插件自身和托管 ONNX Runtime (不复制 native dll，会导致 BadImageFormatException) -->
+      <PluginFiles Include="$(OutputPath)VPet.Plugin.VoiceprintRecognition.dll" />
+      <PluginFiles Include="$(OutputPath)Microsoft.ML.OnnxRuntime.dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(PluginFiles)" DestinationFolder="$(ProjectDir)1103_VoiceprintRecognition\plugin\" SkipUnchangedFiles="true" />
+  </Target>
+</Project>
