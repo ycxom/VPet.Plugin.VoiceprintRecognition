@@ -1,5 +1,8 @@
 using System;
+using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -34,6 +37,11 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// 语音转文字服务
         /// </summary>
         public SpeechToTextService SpeechToText { get; private set; }
+
+        /// <summary>
+        /// 日志缓冲区
+        /// </summary>
+        private readonly ConcurrentQueue<string> _logBuffer = new ConcurrentQueue<string>();
 
         /// <summary>
         /// 设置窗口
@@ -365,8 +373,30 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// </summary>
         public void LogMessage(string message)
         {
-            var timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-            Console.WriteLine($"[声纹识别] [{timestamp}] {message}");
+            var timestamp = DateTime.Now.ToString("HH:mm:ss");
+            var line = $"[{timestamp}] {message}";
+            Console.WriteLine($"[声纹识别] {line}");
+            _logBuffer.Enqueue(line);
+
+            // 限制缓冲区大小
+            while (_logBuffer.Count > 500)
+                _logBuffer.TryDequeue(out _);
+        }
+
+        /// <summary>
+        /// 获取所有日志消息
+        /// </summary>
+        public List<string> GetLogMessages()
+        {
+            return _logBuffer.ToList();
+        }
+
+        /// <summary>
+        /// 清空日志
+        /// </summary>
+        public void ClearLogs()
+        {
+            while (_logBuffer.TryDequeue(out _)) { }
         }
     }
 }

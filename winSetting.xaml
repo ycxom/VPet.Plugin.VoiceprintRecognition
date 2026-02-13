@@ -3,191 +3,238 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
         xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:pu="https://opensource.panuon.com/wpf-ui"
+        xmlns:pu="clr-namespace:Panuon.WPF.UI;assembly=Panuon.WPF.UI"
         mc:Ignorable="d"
-        Title="声纹识别设置"
-        Height="650" Width="500"
+        Title="声纹识别插件设置"
+        Width="800" Height="700"
         WindowStartupLocation="CenterOwner"
-        ResizeMode="NoResize"
-        Background="{DynamicResource DARKPrimary}">
+        ShowInTaskbar="False"
+        FontSize="14">
 
-    <pu:WindowX.Resources>
-        <Style TargetType="TextBlock">
-            <Setter Property="Foreground" Value="{DynamicResource DARKPrimaryText}"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
-        <Style TargetType="CheckBox">
-            <Setter Property="Foreground" Value="{DynamicResource DARKPrimaryText}"/>
-            <Setter Property="VerticalAlignment" Value="Center"/>
-        </Style>
-    </pu:WindowX.Resources>
+    <Grid Background="#FAFAFA">
+        <TabControl>
+            <!-- 基本设置 Tab -->
+            <TabItem Header="&#x2699;&#xFE0F; 基本设置">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                    <StackPanel>
+                        <!-- 功能开关 -->
+                        <GroupBox Header="功能开关" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <CheckBox x:Name="CheckEnableVoiceInput" Content="启用语音输入" Margin="0,5"
+                                        Checked="CheckEnableVoiceInput_Changed" Unchecked="CheckEnableVoiceInput_Changed"/>
+                                <CheckBox x:Name="CheckEnableVoiceprint" Content="启用声纹验证" Margin="0,5"
+                                        Checked="CheckEnableVoiceprint_Changed" Unchecked="CheckEnableVoiceprint_Changed"/>
+                                <CheckBox x:Name="CheckRequireMatch" Content="要求声纹匹配（不匹配时拒绝输入）" Margin="0,5"
+                                        Checked="CheckRequireMatch_Changed" Unchecked="CheckRequireMatch_Changed"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 启用声纹验证后，只有匹配的声纹才能通过语音输入" Foreground="#666666" FontSize="12" Margin="20,0,0,0" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </GroupBox>
 
-    <Grid Margin="15">
-        <Grid.RowDefinitions>
-            <RowDefinition Height="Auto"/>
-            <RowDefinition Height="*"/>
-            <RowDefinition Height="Auto"/>
-        </Grid.RowDefinitions>
+                        <!-- 声纹管理 -->
+                        <GroupBox Header="&#x1F464; 声纹管理" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="验证阈值:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderThreshold" Width="200" Minimum="-1" Maximum="1" Value="0.7" TickFrequency="0.1" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderThreshold_ValueChanged"/>
+                                    <TextBlock x:Name="TextThreshold" Text="0.70" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 阈值越高要求越严格，建议 0.6~0.8" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
 
-        <!-- 标题 -->
-        <TextBlock Grid.Row="0" Text="声纹识别设置" FontSize="20" FontWeight="Bold" Margin="0,0,0,15"/>
+                                <TextBlock Text="已注册的声纹:" Margin="0,5,0,5"/>
+                                <ListBox x:Name="ListVoiceprints" Height="100" Margin="0,0,0,10"/>
 
-        <!-- 设置内容 -->
-        <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
-            <StackPanel>
-                <!-- 基本设置 -->
-                <GroupBox Header="基本设置" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <CheckBox x:Name="CheckEnableVoiceInput" Content="启用语音输入" Margin="0,5"/>
-                        <CheckBox x:Name="CheckEnableVoiceprint" Content="启用声纹验证" Margin="0,5"/>
-                        <CheckBox x:Name="CheckRequireMatch" Content="要求声纹匹配（不匹配时拒绝输入）" Margin="0,5"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <Button x:Name="BtnRegisterVoiceprint" Content="&#x1F3A4; 注册新声纹" Width="140" Margin="0,0,10,0" Click="BtnRegisterVoiceprint_Click"/>
+                                    <Button x:Name="BtnDeleteVoiceprint" Content="&#x1F5D1;&#xFE0F; 删除选中" Width="120" Click="BtnDeleteVoiceprint_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 模型目录 -->
+                        <GroupBox Header="模型目录" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <TextBlock x:Name="TextBlockModelPath" Text="models/" FontFamily="Consolas" Background="#F5F5F5" Padding="5" Margin="0,5"/>
+                                <Button x:Name="BtnOpenModelFolder" Content="&#x1F4C1; 打开模型文件夹" Width="200" HorizontalAlignment="Left" Margin="0,5"
+                                      Click="BtnOpenModelFolder_Click"/>
+                            </StackPanel>
+                        </GroupBox>
                     </StackPanel>
-                </GroupBox>
+                </ScrollViewer>
+            </TabItem>
 
-                <!-- 声纹识别设置 -->
-                <GroupBox Header="声纹识别" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="声纹模型:"/>
-                            <TextBox x:Name="TextVoiceprintModel" Grid.Column="1"/>
-                        </Grid>
+            <!-- 模型设置 Tab -->
+            <TabItem Header="&#x1F9E0; 模型设置">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                    <StackPanel>
+                        <!-- 声纹模型 -->
+                        <GroupBox Header="声纹识别模型" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <TextBlock Text="模型文件:" Margin="0,5,0,2"/>
+                                <TextBox x:Name="TextVoiceprintModel" Margin="0,0,0,10" TextChanged="TextVoiceprintModel_TextChanged"/>
+                                <TextBlock x:Name="TextBlockVoiceprintModelStatus" Text="" Foreground="#666666" FontSize="12" Margin="0,0,0,5"/>
+                            </StackPanel>
+                        </GroupBox>
 
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="50"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="验证阈值:"/>
-                            <Slider x:Name="SliderThreshold" Grid.Column="1"
-                                    Minimum="-1" Maximum="1"
-                                    TickFrequency="0.1" IsSnapToTickEnabled="True"
-                                    VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TextThreshold" Grid.Column="2" Text="0.7"/>
-                        </Grid>
+                        <!-- 语音转文字模型 -->
+                        <GroupBox Header="&#x1F4AC; 语音转文字模型" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <TextBlock Text="Whisper 模型文件:" Margin="0,5,0,2"/>
+                                <TextBox x:Name="TextWhisperModel" Margin="0,0,0,10" TextChanged="TextWhisperModel_TextChanged"/>
+                                <TextBlock x:Name="TextBlockWhisperModelStatus" Text="" Foreground="#666666" FontSize="12" Margin="0,0,0,10"/>
 
-                        <Separator Margin="0,10"/>
+                                <TextBlock Text="识别语言:" Margin="0,5,0,2"/>
+                                <ComboBox x:Name="ComboLanguage" Margin="0,0,0,10" SelectionChanged="ComboLanguage_SelectionChanged">
+                                    <ComboBoxItem Content="中文" Tag="zh"/>
+                                    <ComboBoxItem Content="English" Tag="en"/>
+                                    <ComboBoxItem Content="日本語" Tag="ja"/>
+                                    <ComboBoxItem Content="한국어" Tag="ko"/>
+                                    <ComboBoxItem Content="自动检测" Tag="auto"/>
+                                </ComboBox>
 
-                        <TextBlock Text="已注册的声纹:" Margin="0,5"/>
-                        <ListBox x:Name="ListVoiceprints" Height="80" Margin="0,5"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="最大解码长度:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderMaxDecoding" Width="200" Minimum="64" Maximum="1024" Value="448" TickFrequency="64" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderMaxDecoding_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderMaxDecoding, Path=Value, StringFormat={}{0:F0}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
 
-                        <StackPanel Orientation="Horizontal" Margin="0,5">
-                            <Button x:Name="BtnRegisterVoiceprint" Content="注册新声纹" Margin="0,0,10,0" Padding="15,5"/>
-                            <Button x:Name="BtnDeleteVoiceprint" Content="删除选中" Padding="15,5"/>
+            <!-- 音频设置 Tab -->
+            <TabItem Header="&#x1F3A7; 音频设置">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                    <StackPanel>
+                        <!-- 输入设备 -->
+                        <GroupBox Header="输入设备" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <TextBlock Text="麦克风设备:" Margin="0,5,0,2"/>
+                                <StackPanel Orientation="Horizontal">
+                                    <ComboBox x:Name="ComboInputDevice" Width="400" SelectionChanged="ComboInputDevice_SelectionChanged"/>
+                                    <Button x:Name="BtnRefreshDevices" Content="&#x1F504; 刷新" Margin="10,0,0,0" Click="BtnRefreshDevices_Click"/>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,15,0,5">
+                                    <TextBlock Text="采样率:" VerticalAlignment="Center" Width="80"/>
+                                    <ComboBox x:Name="ComboSampleRate" Width="150" SelectionChanged="ComboSampleRate_SelectionChanged">
+                                        <ComboBoxItem Content="16000 Hz" Tag="16000"/>
+                                        <ComboBoxItem Content="22050 Hz" Tag="22050"/>
+                                        <ComboBoxItem Content="44100 Hz" Tag="44100"/>
+                                        <ComboBoxItem Content="48000 Hz" Tag="48000"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="BtnTestMic" Content="&#x1F3A4; 测试麦克风" Width="140" Click="BtnTestMic_Click"/>
+                                    <TextBlock x:Name="TextBlockMicStatus" Text="" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="#666666"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 录音参数 -->
+                        <GroupBox Header="&#x23F1;&#xFE0F; 录音参数" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="最短录音:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderMinDuration" Width="200" Minimum="0.5" Maximum="5" Value="1" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderMinDuration_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderMinDuration, Path=Value, StringFormat={}{0:F1} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="最长录音:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderMaxDuration" Width="200" Minimum="3" Maximum="30" Value="10" TickFrequency="1" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderMaxDuration_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderMaxDuration, Path=Value, StringFormat={}{0:F0} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="静音超时:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderSilenceTimeout" Width="200" Minimum="0.5" Maximum="5" Value="2" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderSilenceTimeout_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderSilenceTimeout, Path=Value, StringFormat={}{0:F1} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 性能设置 -->
+                        <GroupBox Header="&#x26A1; 性能设置" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <CheckBox x:Name="CheckUseGPU" Content="使用 GPU 加速（需要 CUDA/DirectML）" Margin="0,5"
+                                        Checked="CheckUseGPU_Changed" Unchecked="CheckUseGPU_Changed"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; GPU 加速可显著提升推理速度，需要安装对应驱动" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5">
+                                    <TextBlock Text="推理线程:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderThreads" Width="200" Minimum="1" Maximum="16" Value="4" TickFrequency="1" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderThreads_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderThreads, Path=Value, StringFormat={}{0:F0} 线程}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
+            <!-- 调试 Tab -->
+            <TabItem Header="&#x1F527; 调试">
+                <Grid Margin="20">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- 调试设置 -->
+                    <GroupBox Grid.Row="0" Header="调试设置" Margin="0,0,0,20">
+                        <StackPanel Margin="10">
+                            <CheckBox x:Name="CheckDebugMode" Content="调试模式" Margin="0,5"
+                                    Checked="CheckDebugMode_Changed" Unchecked="CheckDebugMode_Changed"/>
+                            <CheckBox x:Name="CheckSaveRecordings" Content="保存录音文件（用于调试）" Margin="0,5"
+                                    Checked="CheckSaveRecordings_Changed" Unchecked="CheckSaveRecordings_Changed"/>
                         </StackPanel>
-                    </StackPanel>
-                </GroupBox>
+                    </GroupBox>
 
-                <!-- 语音转文字设置 -->
-                <GroupBox Header="语音转文字" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="Whisper模型:"/>
-                            <TextBox x:Name="TextWhisperModel" Grid.Column="1"/>
+                    <!-- 模型信息 -->
+                    <GroupBox Grid.Row="1" Header="&#x1F4CB; 模型状态" Margin="0,0,0,20">
+                        <StackPanel Margin="10">
+                            <TextBlock x:Name="TextBlockModelInfo" Text="加载中..." FontSize="12" Foreground="#666666" TextWrapping="Wrap"/>
+                            <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                <Button x:Name="BtnReloadModels" Content="&#x1F504; 重新加载模型" Width="160" Click="BtnReloadModels_Click"/>
+                                <TextBlock x:Name="TextBlockReloadStatus" Text="" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="#666666"/>
+                            </StackPanel>
+                        </StackPanel>
+                    </GroupBox>
+
+                    <!-- 日志区域 -->
+                    <GroupBox Grid.Row="2" Header="&#x1F4CB; 调试日志">
+                        <Grid>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="Auto"/>
+                                <RowDefinition Height="*"/>
+                            </Grid.RowDefinitions>
+
+                            <Button Grid.Row="0" x:Name="BtnClearLog" Content="&#x1F5D1;&#xFE0F; 清空日志" Width="100" HorizontalAlignment="Right" Margin="0,0,0,10" Click="BtnClearLog_Click"/>
+
+                            <ScrollViewer Grid.Row="1" x:Name="LogScrollViewer" VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Auto">
+                                <TextBox x:Name="TextBoxLog" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0" Background="Transparent" FontFamily="Consolas" FontSize="11" Text="日志将显示在这里..."/>
+                            </ScrollViewer>
                         </Grid>
+                    </GroupBox>
+                </Grid>
+            </TabItem>
+        </TabControl>
 
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="语言:"/>
-                            <ComboBox x:Name="ComboLanguage" Grid.Column="1">
-                                <ComboBoxItem Content="中文" Tag="zh"/>
-                                <ComboBoxItem Content="English" Tag="en"/>
-                                <ComboBoxItem Content="日本語" Tag="ja"/>
-                                <ComboBoxItem Content="한국어" Tag="ko"/>
-                                <ComboBoxItem Content="自动检测" Tag="auto"/>
-                            </ComboBox>
-                        </Grid>
-                    </StackPanel>
-                </GroupBox>
-
-                <!-- 音频设置 -->
-                <GroupBox Header="音频设置" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="输入设备:"/>
-                            <ComboBox x:Name="ComboInputDevice" Grid.Column="1"/>
-                        </Grid>
-
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="采样率:"/>
-                            <ComboBox x:Name="ComboSampleRate" Grid.Column="1">
-                                <ComboBoxItem Content="16000 Hz" Tag="16000"/>
-                                <ComboBoxItem Content="22050 Hz" Tag="22050"/>
-                                <ComboBoxItem Content="44100 Hz" Tag="44100"/>
-                                <ComboBoxItem Content="48000 Hz" Tag="48000"/>
-                            </ComboBox>
-                        </Grid>
-
-                        <Button x:Name="BtnTestMic" Content="测试麦克风" Margin="0,10,0,0" Padding="15,5" HorizontalAlignment="Left"/>
-                    </StackPanel>
-                </GroupBox>
-
-                <!-- 性能设置 -->
-                <GroupBox Header="性能设置" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <CheckBox x:Name="CheckUseGPU" Content="使用 GPU 加速（需要 CUDA/DirectML）" Margin="0,5"/>
-
-                        <Grid Margin="0,5">
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="100"/>
-                                <ColumnDefinition Width="*"/>
-                                <ColumnDefinition Width="30"/>
-                            </Grid.ColumnDefinitions>
-                            <TextBlock Text="线程数:"/>
-                            <Slider x:Name="SliderThreads" Grid.Column="1"
-                                    Minimum="1" Maximum="16"
-                                    TickFrequency="1" IsSnapToTickEnabled="True"
-                                    VerticalAlignment="Center"/>
-                            <TextBlock x:Name="TextThreads" Grid.Column="2" Text="4"/>
-                        </Grid>
-                    </StackPanel>
-                </GroupBox>
-
-                <!-- 调试设置 -->
-                <GroupBox Header="调试" Margin="0,0,0,10"
-                          BorderBrush="{DynamicResource DARKPrimaryDarker}"
-                          Foreground="{DynamicResource DARKPrimaryText}">
-                    <StackPanel Margin="10">
-                        <CheckBox x:Name="CheckDebugMode" Content="调试模式" Margin="0,5"/>
-                        <CheckBox x:Name="CheckSaveRecordings" Content="保存录音文件（用于调试）" Margin="0,5"/>
-                    </StackPanel>
-                </GroupBox>
+        <!-- 底部按钮栏 -->
+        <Grid VerticalAlignment="Bottom" Background="White" Height="60">
+            <Border BorderBrush="#E0E0E0" BorderThickness="0,1,0,0"/>
+            <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center" Margin="20">
+                <Button x:Name="BtnTestVoice" Content="&#x1F3A4; 测试语音" Width="100" Margin="0,0,10,0" Click="BtnTestVoice_Click"/>
+                <Button x:Name="BtnSave" Content="&#x1F4BE; 保存" Width="80" Margin="0,0,10,0" Click="BtnSave_Click"/>
+                <Button x:Name="BtnReset" Content="&#x1F504; 重置" Width="80" Margin="0,0,10,0" Click="BtnReset_Click"/>
+                <Button x:Name="BtnCancel" Content="&#x274C; 取消" Width="80" Click="BtnCancel_Click"/>
             </StackPanel>
-        </ScrollViewer>
-
-        <!-- 底部按钮 -->
-        <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,15,0,0">
-            <Button x:Name="BtnSave" Content="保存" Padding="20,8" Margin="0,0,10,0"/>
-            <Button x:Name="BtnCancel" Content="取消" Padding="20,8"/>
-        </StackPanel>
+        </Grid>
     </Grid>
 </pu:WindowX>
