@@ -124,7 +124,12 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 string settingsPath = Path.Combine(DataPath, "settings.json");
                 Settings = VoiceprintSettings.LoadFromFile(settingsPath);
+
+                // 同步 DebugMode 到 LogLevel
+                LogLevel = Settings.DebugMode ? 1 : 0;
+
                 LogMessage("设置加载完成");
+                LogDebug($"设置文件: {settingsPath}");
             }
             catch (Exception ex)
             {
@@ -205,8 +210,10 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 if (File.Exists(modelPath))
                 {
+                    LogDebug($"加载声纹模型: {modelPath}");
                     Recognizer = new VoiceprintRecognizer(modelPath, Settings);
                     LogMessage($"声纹识别引擎已加载: {Settings.VoiceprintModelFile}");
+                    LogDebug($"特征维度: {Recognizer.EmbeddingDimension}, 已注册声纹: {Recognizer.GetRegisteredVoiceprints().Count}");
                 }
                 else
                 {
@@ -236,6 +243,7 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 AudioCapture = new AudioCapture(Settings);
                 LogMessage("音频采集器初始化完成");
+                LogDebug($"音频设备: {Settings.InputDeviceIndex}, 采样率: {Settings.SampleRate}, 通道: {Settings.Channels}");
             }
             catch (Exception ex)
             {
@@ -258,8 +266,13 @@ namespace VPet.Plugin.VoiceprintRecognition
                 }
 
                 string whisperModelPath = Path.Combine(ModelsPath, Settings.WhisperModelFile);
-                SpeechToText = new SpeechToTextService(whisperModelPath, Settings);
-                LogMessage("语音转文字服务初始化完成");
+                SpeechToText = new SpeechToTextService(whisperModelPath, Settings,
+                    logInfo: LogMessage, logDebug: LogDebug);
+
+                if (SpeechToText.IsInitialized)
+                    LogMessage($"语音转文字模型已加载: {SpeechToText.ModelName}");
+                else
+                    LogMessage($"语音转文字模型未加载 (模型文件: {whisperModelPath})");
             }
             catch (Exception ex)
             {
@@ -369,26 +382,48 @@ namespace VPet.Plugin.VoiceprintRecognition
         }
 
         /// <summary>
-        /// 输出日志
+        /// 当前日志等级 (0=Info, 1=Debug)
+        /// </summary>
+        public int LogLevel { get; set; } = 0;
+
+        /// <summary>
+        /// 输出 Info 日志
         /// </summary>
         public void LogMessage(string message)
         {
+            Log("INFO", message);
+        }
+
+        /// <summary>
+        /// 输出 Debug 日志
+        /// </summary>
+        public void LogDebug(string message)
+        {
+            if (LogLevel < 1) return;
+            Log("DEBUG", message);
+        }
+
+        private void Log(string level, string message)
+        {
             var timestamp = DateTime.Now.ToString("HH:mm:ss");
-            var line = $"[{timestamp}] {message}";
+            var line = $"[{timestamp}] [{level}] {message}";
             Console.WriteLine($"[声纹识别] {line}");
             _logBuffer.Enqueue(line);
 
-            // 限制缓冲区大小
             while (_logBuffer.Count > 500)
                 _logBuffer.TryDequeue(out _);
         }
 
         /// <summary>
-        /// 获取所有日志消息
+        /// 获取日志消息，按当前等级过滤
         /// </summary>
         public List<string> GetLogMessages()
         {
-            return _logBuffer.ToList();
+            if (LogLevel >= 1)
+                return _logBuffer.ToList();
+
+            // Info 模式下过滤掉 DEBUG
+            return _logBuffer.Where(l => !l.Contains("[DEBUG]")).ToList();
         }
 
         /// <summary>

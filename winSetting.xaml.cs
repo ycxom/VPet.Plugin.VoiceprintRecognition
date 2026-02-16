@@ -500,6 +500,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         {
             try
             {
+                _plugin.LogMessage("开始麦克风测试...");
                 BtnTestMic.IsEnabled = false;
                 string originalContent = BtnTestMic.Content?.ToString();
                 BtnTestMic.Content = "录音中...";
@@ -510,6 +511,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     int deviceIndex = int.Parse(selectedDevice.Tag.ToString());
                     _plugin.AudioCapture?.UpdateInputDevice(deviceIndex);
+                    _plugin.LogDebug($"使用音频设备: {deviceIndex}");
                 }
 
                 _plugin.AudioCapture?.StartCapture();
@@ -526,12 +528,14 @@ namespace VPet.Plugin.VoiceprintRecognition
                         maxVolume = Math.Max(maxVolume, volume);
                     }
 
+                    _plugin.LogMessage($"麦克风测试完成: 录音 {audioData.Length / 32000.0:F1} 秒, 最大音量 {maxVolume:P0}");
                     TextBlockMicStatus.Text = $"录音 {audioData.Length / 32000.0:F1} 秒, 最大音量 {maxVolume:P0}";
                     MessageBox.Show($"麦克风测试完成！\n录音长度: {audioData.Length / 32000.0:F1} 秒\n最大音量: {maxVolume:P0}",
                         "测试结果", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 else
                 {
+                    _plugin.LogMessage("麦克风测试失败: 未获取到音频数据");
                     TextBlockMicStatus.Text = "未获取到音频数据";
                     MessageBox.Show("未获取到音频数据，请检查麦克风连接。", "测试失败", MessageBoxButton.OK, MessageBoxImage.Warning);
                 }
@@ -541,6 +545,7 @@ namespace VPet.Plugin.VoiceprintRecognition
             }
             catch (Exception ex)
             {
+                _plugin.LogMessage($"麦克风测试异常: {ex.Message}");
                 TextBlockMicStatus.Text = $"测试失败: {ex.Message}";
                 MessageBox.Show($"测试失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 BtnTestMic.IsEnabled = true;
@@ -585,7 +590,10 @@ namespace VPet.Plugin.VoiceprintRecognition
         private void CheckDebugMode_Changed(object sender, RoutedEventArgs e)
         {
             if (_settings != null && sender is CheckBox cb)
+            {
                 _settings.DebugMode = cb.IsChecked == true;
+                _plugin.LogLevel = _settings.DebugMode ? 1 : 0;
+            }
         }
 
         private void CheckSaveRecordings_Changed(object sender, RoutedEventArgs e)
@@ -637,31 +645,48 @@ namespace VPet.Plugin.VoiceprintRecognition
         {
             try
             {
+                _plugin.LogMessage("开始语音测试...");
+
                 if (_plugin.SpeechToText == null || !_plugin.SpeechToText.IsInitialized)
                 {
+                    _plugin.LogMessage("语音测试失败: 语音转文字模型未加载");
                     MessageBox.Show("语音转文字模型未加载，请先配置模型。", "提示", MessageBoxButton.OK, MessageBoxImage.Information);
+                    return;
+                }
+
+                if (_plugin.AudioCapture == null)
+                {
+                    _plugin.LogMessage("语音测试失败: 音频采集器未初始化");
+                    MessageBox.Show("音频采集器未初始化。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
                 MessageBox.Show("点击确定后开始录音，请说话，然后点击确定结束。", "语音测试", MessageBoxButton.OK, MessageBoxImage.Information);
 
-                _plugin.AudioCapture?.StartCapture();
+                _plugin.LogMessage("开始录音...");
+                _plugin.AudioCapture.StartCapture();
 
                 MessageBox.Show("录音中...点击确定结束录音。", "语音测试", MessageBoxButton.OK, MessageBoxImage.Information);
 
-                var audioData = _plugin.AudioCapture?.StopCapture();
+                var audioData = _plugin.AudioCapture.StopCapture();
+                _plugin.LogMessage($"录音结束, 数据长度: {audioData?.Length ?? 0} 字节");
 
                 if (audioData == null || audioData.Length < 16000 * 2)
                 {
+                    _plugin.LogMessage($"录音数据不足 ({audioData?.Length ?? 0} 字节), 最少需要 {16000 * 2} 字节");
                     MessageBox.Show("录音数据不足，请重试。", "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
                     return;
                 }
 
+                _plugin.LogMessage("开始语音转文字...");
                 string text = _plugin.SpeechToText.Transcribe(audioData);
+                _plugin.LogMessage($"识别结果: {text}");
                 MessageBox.Show($"识别结果:\n{text}", "语音转文字", MessageBoxButton.OK, MessageBoxImage.Information);
             }
             catch (Exception ex)
             {
+                _plugin.LogMessage($"语音测试异常: {ex.Message}");
+                _plugin.LogDebug($"异常详情: {ex}");
                 MessageBox.Show($"语音测试失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }

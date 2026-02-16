@@ -189,10 +189,11 @@
                     <!-- 调试设置 -->
                     <GroupBox Grid.Row="0" Header="调试设置" Margin="0,0,0,20">
                         <StackPanel Margin="10">
-                            <CheckBox x:Name="CheckDebugMode" Content="调试模式" Margin="0,5"
+                            <CheckBox x:Name="CheckDebugMode" Content="调试模式（显示 Debug 日志）" Margin="0,5"
                                     Checked="CheckDebugMode_Changed" Unchecked="CheckDebugMode_Changed"/>
                             <CheckBox x:Name="CheckSaveRecordings" Content="保存录音文件（用于调试）" Margin="0,5"
                                     Checked="CheckSaveRecordings_Changed" Unchecked="CheckSaveRecordings_Changed"/>
+                            <TextBlock Text="&#x2139;&#xFE0F; 关闭调试模式时仅显示 INFO 日志，开启后显示 DEBUG 日志" Foreground="#666666" FontSize="12" Margin="20,0,0,0" TextWrapping="Wrap"/>
                         </StackPanel>
                     </GroupBox>
 
