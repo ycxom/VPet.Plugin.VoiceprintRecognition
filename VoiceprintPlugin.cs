@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using VPet_Simulator.Windows.Interface;
@@ -39,6 +40,21 @@ namespace VPet.Plugin.VoiceprintRecognition
         public SpeechToTextService SpeechToText { get; private set; }
 
         /// <summary>
+        /// 声纹唤醒服务
+        /// </summary>
+        public VoiceWakeupService WakeupService { get; private set; }
+
+        /// <summary>
+        /// 外部 ASR 服务
+        /// </summary>
+        public ExternalAsrService ExternalAsr { get; private set; }
+
+        /// <summary>
+        /// Windows 语音识别服务
+        /// </summary>
+        public WindowsSpeechService WindowsSpeech { get; private set; }
+
+        /// <summary>
         /// 日志缓冲区
         /// </summary>
         private readonly ConcurrentQueue<string> _logBuffer = new ConcurrentQueue<string>();
@@ -47,6 +63,11 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// 设置窗口
         /// </summary>
         private winSetting _winSetting;
+
+        /// <summary>
+        /// TalkBox 引用（用于唤醒文字路由）
+        /// </summary>
+        private VoiceprintTalkBox _talkBox;
 
         /// <summary>
         /// 插件根目录
@@ -110,6 +131,59 @@ namespace VPet.Plugin.VoiceprintRecognition
         }
 
         /// <summary>
+        /// 注册程序集解析器并预加载运行时 DLL
+        /// System.Speech NuGet 包的根目录 DLL 是平台检测 stub，真正的 Windows 实现在 runtimes\ 子目录
+        /// </summary>
+        private void RegisterAssemblyResolver()
+        {
+            var pluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
+            var runtimesDir = Path.Combine(pluginDir, "runtimes");
+
+            // 预加载 System.Speech 运行时 DLL（必须在任何 System.Speech 类型被引用之前）
+            var speechDll = Path.Combine(runtimesDir, "System.Speech.dll");
+            if (File.Exists(speechDll))
+            {
+                try
+                {
+                    var loadContext = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                        Assembly.GetExecutingAssembly()) ?? System.Runtime.Loader.AssemblyLoadContext.Default;
+                    loadContext.LoadFromAssemblyPath(speechDll);
+                    LogDebug($"预加载 System.Speech 成功: {speechDll}");
+                }
+                catch (Exception ex)
+                {
+                    LogMessage($"预加载 System.Speech 失败: {ex.Message}");
+                }
+            }
+            else
+            {
+                LogMessage($"System.Speech 运行时 DLL 不存在: {speechDll}");
+            }
+
+            // 注册解析器作为后备
+            var loadCtx = System.Runtime.Loader.AssemblyLoadContext.GetLoadContext(
+                Assembly.GetExecutingAssembly()) ?? System.Runtime.Loader.AssemblyLoadContext.Default;
+            loadCtx.Resolving += (context, assemblyName) =>
+            {
+                var dllPath = Path.Combine(runtimesDir, assemblyName.Name + ".dll");
+                if (File.Exists(dllPath))
+                {
+                    LogDebug($"程序集解析 (runtimes): {assemblyName.Name} -> {dllPath}");
+                    return context.LoadFromAssemblyPath(dllPath);
+                }
+
+                dllPath = Path.Combine(pluginDir, assemblyName.Name + ".dll");
+                if (File.Exists(dllPath))
+                {
+                    LogDebug($"程序集解析: {assemblyName.Name} -> {dllPath}");
+                    return context.LoadFromAssemblyPath(dllPath);
+                }
+                return null;
+            };
+            LogDebug($"程序集解析器已注册，runtimes 目录: {runtimesDir}");
+        }
+
+        /// <summary>
         /// 加载设置
         /// </summary>
         private void LoadSettings()
@@ -170,6 +244,9 @@ namespace VPet.Plugin.VoiceprintRecognition
                 // 初始化路径
                 InitializePaths();
 
+                // 注册程序集解析器，确保从插件目录加载 System.Speech 等运行时 DLL
+                RegisterAssemblyResolver();
+
                 // 加载设置
                 LoadSettings();
 
@@ -181,6 +258,15 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 // 初始化语音转文字服务（可选）
                 InitializeSpeechToText();
+
+                // 初始化外部 ASR 服务
+                InitializeExternalAsr();
+
+                // 初始化唤醒服务
+                InitializeWakeupService();
+
+                // 初始化 Windows 语音识别服务
+                InitializeWindowsSpeech();
 
                 // 添加设置菜单
                 AddSettingsMenu();
@@ -211,7 +297,8 @@ namespace VPet.Plugin.VoiceprintRecognition
                 if (File.Exists(modelPath))
                 {
                     LogDebug($"加载声纹模型: {modelPath}");
-                    Recognizer = new VoiceprintRecognizer(modelPath, Settings);
+                    Recognizer = new VoiceprintRecognizer(modelPath, Settings,
+                        logInfo: LogMessage, logDebug: LogDebug);
                     LogMessage($"声纹识别引擎已加载: {Settings.VoiceprintModelFile}");
                     LogDebug($"特征维度: {Recognizer.EmbeddingDimension}, 已注册声纹: {Recognizer.GetRegisteredVoiceprints().Count}");
                 }
@@ -347,6 +434,246 @@ namespace VPet.Plugin.VoiceprintRecognition
         public override void Save()
         {
             SaveSettings();
+        }
+
+        /// <summary>
+        /// 初始化外部 ASR 服务
+        /// </summary>
+        private void InitializeExternalAsr()
+        {
+            try
+            {
+                ExternalAsr?.Dispose();
+                ExternalAsr = new ExternalAsrService(Settings,
+                    logInfo: LogMessage, logDebug: LogDebug);
+
+                if (!string.IsNullOrWhiteSpace(Settings.AsrApiUrl))
+                    LogMessage($"外部 ASR 服务已初始化: {Settings.AsrApiUrl}");
+                else
+                    LogDebug("外部 ASR 未配置 API URL");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"初始化外部 ASR 失败: {ex.Message}");
+                ExternalAsr = null;
+            }
+        }
+
+        /// <summary>
+        /// 初始化唤醒服务
+        /// </summary>
+        private void InitializeWakeupService()
+        {
+            try
+            {
+                if (WakeupService != null)
+                {
+                    WakeupService.StopMonitoring();
+                    WakeupService.WakeupDetected -= OnWakeupDetected;
+                }
+
+                // 如果使用 Windows 语音模式，不初始化自定义唤醒服务
+                if (Settings.UseWindowsSpeech)
+                {
+                    WakeupService = null;
+                    LogDebug("唤醒服务: 使用 Windows 语音模式，跳过自定义唤醒");
+                    return;
+                }
+
+                if (Recognizer == null || AudioCapture == null)
+                {
+                    LogDebug("唤醒服务需要声纹识别引擎和音频采集器");
+                    WakeupService = null;
+                    return;
+                }
+
+                WakeupService = new VoiceWakeupService(Settings, Recognizer, AudioCapture,
+                    logInfo: LogMessage, logDebug: LogDebug);
+                WakeupService.WakeupDetected += OnWakeupDetected;
+
+                // 如果已启用且有注册声纹，自动开始监听
+                if (Settings.EnableWakeup && Recognizer.GetRegisteredVoiceprints().Count > 0)
+                {
+                    WakeupService.StartMonitoring();
+                }
+
+                LogDebug("唤醒服务已初始化");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"初始化唤醒服务失败: {ex.Message}");
+                WakeupService = null;
+            }
+        }
+
+        /// <summary>
+        /// 初始化 Windows 语音识别服务
+        /// </summary>
+        private void InitializeWindowsSpeech()
+        {
+            try
+            {
+                if (WindowsSpeech != null)
+                {
+                    WindowsSpeech.Stop();
+                    WindowsSpeech.WakeupTextReceived -= OnWindowsSpeechTextReceived;
+                    WindowsSpeech.Dispose();
+                    WindowsSpeech = null;
+                }
+
+                if (!Settings.UseWindowsSpeech)
+                {
+                    LogDebug("Windows 语音识别: 未启用");
+                    return;
+                }
+
+                if (Recognizer == null || AudioCapture == null)
+                {
+                    LogDebug("Windows 语音识别需要声纹识别引擎和音频采集器");
+                    return;
+                }
+
+                if (Recognizer.GetRegisteredVoiceprints().Count == 0)
+                {
+                    LogDebug("Windows 语音识别需要至少一个已注册声纹");
+                    return;
+                }
+
+                WindowsSpeech = new WindowsSpeechService(Settings, Recognizer, AudioCapture,
+                    logInfo: LogMessage, logDebug: LogDebug);
+                WindowsSpeech.WakeupTextReceived += OnWindowsSpeechTextReceived;
+
+                // 如果已启用唤醒，自动启动
+                if (Settings.EnableWakeup)
+                {
+                    WindowsSpeech.Start();
+                }
+
+                LogDebug("Windows 语音识别服务已初始化");
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"初始化 Windows 语音识别失败: {ex.Message}");
+                WindowsSpeech = null;
+            }
+        }
+
+        /// <summary>
+        /// 唤醒检测回调（自定义模式：Mel DTW + 外部 ASR）
+        /// </summary>
+        private async void OnWakeupDetected(byte[] audioData, VoiceprintVerificationResult result)
+        {
+            try
+            {
+                LogMessage($"唤醒触发 - 用户: {result.MatchedUserId}, 置信度: {result.Confidence:P1}");
+
+                // 使用外部 ASR 转文字
+                if (ExternalAsr == null)
+                {
+                    LogMessage("外部 ASR 服务未初始化，无法转文字");
+                    return;
+                }
+
+                LogMessage("调用外部 ASR...");
+                var text = await ExternalAsr.TranscribeAsync(audioData);
+
+                if (string.IsNullOrWhiteSpace(text))
+                {
+                    LogMessage("ASR 未返回有效文字");
+                    return;
+                }
+
+                LogMessage($"ASR 识别结果: {text}");
+                RouteTextToTalkBox(text);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"唤醒处理失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Windows 语音识别文字结果回调（已包含听写文字，不需要外部 ASR）
+        /// </summary>
+        private void OnWindowsSpeechTextReceived(string text, VoiceprintVerificationResult result)
+        {
+            try
+            {
+                var userId = result?.MatchedUserId ?? "未知";
+                var confidence = result?.Confidence ?? 0;
+                LogMessage($"Windows 语音唤醒 - 用户: {userId}, 声纹置信度: {confidence:P1}, 文字: {text}");
+                RouteTextToTalkBox(text);
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"Windows 语音结果处理失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 将文字路由到 TalkBox
+        /// </summary>
+        private void RouteTextToTalkBox(string text)
+        {
+            if (_talkBox != null)
+            {
+                _talkBox.OnWakeupTextReceived(text, Settings.WakeupAutoSend);
+            }
+            else
+            {
+                LogMessage("TalkBox 未初始化，无法路由文字");
+            }
+        }
+
+        /// <summary>
+        /// 设置 TalkBox 引用
+        /// </summary>
+        public void SetTalkBox(VoiceprintTalkBox talkBox)
+        {
+            _talkBox = talkBox;
+        }
+
+        /// <summary>
+        /// 重新加载唤醒服务（模式互斥：Windows Speech 或自定义模式）
+        /// </summary>
+        public void ReloadWakeupService()
+        {
+            try
+            {
+                // 停止旧的 Windows 语音服务
+                if (WindowsSpeech != null)
+                {
+                    WindowsSpeech.Stop();
+                    WindowsSpeech.WakeupTextReceived -= OnWindowsSpeechTextReceived;
+                    WindowsSpeech.Dispose();
+                    WindowsSpeech = null;
+                }
+
+                // 停止旧的自定义唤醒服务
+                if (WakeupService != null)
+                {
+                    WakeupService.StopMonitoring();
+                    WakeupService.WakeupDetected -= OnWakeupDetected;
+                    WakeupService = null;
+                }
+
+                InitializeExternalAsr();
+
+                if (Settings.UseWindowsSpeech)
+                {
+                    // Windows 语音模式
+                    InitializeWindowsSpeech();
+                }
+                else
+                {
+                    // 自定义模式
+                    InitializeWakeupService();
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"重新加载唤醒服务失败: {ex.Message}");
+            }
         }
 
         /// <summary>

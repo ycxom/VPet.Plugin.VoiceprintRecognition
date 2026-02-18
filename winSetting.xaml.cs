@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
@@ -129,6 +130,68 @@ namespace VPet.Plugin.VoiceprintRecognition
             CheckDebugMode.IsChecked = _settings.DebugMode;
             CheckSaveRecordings.IsChecked = _settings.SaveRecordings;
 
+            // 唤醒设置
+            CheckEnableWakeup.IsChecked = _settings.EnableWakeup;
+            CheckWakeupAutoSend.IsChecked = _settings.WakeupAutoSend;
+            SliderWakeupCooldown.Value = _settings.WakeupCooldown;
+            SliderWakeWordThreshold.Value = _settings.WakeWordThreshold;
+
+            // 唤醒模式选择
+            if (_settings.UseWindowsSpeech)
+                RadioWindowsSpeech.IsChecked = true;
+            else
+                RadioCustomMode.IsChecked = true;
+
+            // Windows 语音识别设置
+            SliderWinSpeechConfidence.Value = _settings.WindowsSpeechConfidence;
+            SliderDictationTimeout.Value = _settings.DictationTimeout;
+            foreach (ComboBoxItem item in ComboWinSpeechCulture.Items)
+            {
+                if (item.Tag?.ToString() == _settings.WindowsSpeechCulture)
+                {
+                    ComboWinSpeechCulture.SelectedItem = item;
+                    break;
+                }
+            }
+            if (ComboWinSpeechCulture.SelectedItem == null && ComboWinSpeechCulture.Items.Count > 0)
+                ComboWinSpeechCulture.SelectedIndex = 0;
+
+            // 外部 ASR 设置
+            TextAsrApiUrl.Text = _settings.AsrApiUrl ?? "";
+            PasswordAsrApiKey.Password = _settings.AsrApiKey ?? "";
+            TextAsrResponsePath.Text = _settings.AsrResponseTextPath ?? "result";
+            SliderAsrTimeout.Value = _settings.AsrTimeout;
+
+            // ASR 请求格式
+            foreach (ComboBoxItem item in ComboAsrFormat.Items)
+            {
+                if (item.Tag?.ToString() == _settings.AsrRequestFormat)
+                {
+                    ComboAsrFormat.SelectedItem = item;
+                    break;
+                }
+            }
+            if (ComboAsrFormat.SelectedItem == null && ComboAsrFormat.Items.Count > 0)
+                ComboAsrFormat.SelectedIndex = 0;
+
+            // ASR 语言
+            foreach (ComboBoxItem item in ComboAsrLanguage.Items)
+            {
+                if (item.Tag?.ToString() == _settings.AsrLanguage)
+                {
+                    ComboAsrLanguage.SelectedItem = item;
+                    break;
+                }
+            }
+            if (ComboAsrLanguage.SelectedItem == null && ComboAsrLanguage.Items.Count > 0)
+                ComboAsrLanguage.SelectedIndex = 0;
+
+            // 更新监听状态显示
+            UpdateMonitoringStatus();
+
+            // 更新唤醒模式 UI 可见性
+            UpdateWakeModeVisibility();
+
             // 更新模型文件状态
             UpdateModelFileStatus();
         }
@@ -231,6 +294,30 @@ namespace VPet.Plugin.VoiceprintRecognition
                 lines.Add("音频捕获: 未初始化");
             }
 
+            // 唤醒服务状态
+            if (_plugin.WindowsSpeech != null)
+            {
+                lines.Add($"Windows 语音识别: {(_plugin.WindowsSpeech.IsListening ? "监听中" : "已初始化")}");
+            }
+            else if (_plugin.WakeupService != null)
+            {
+                lines.Add($"唤醒服务: {(_plugin.WakeupService.IsMonitoring ? "监听中" : "已初始化")}");
+            }
+            else
+            {
+                lines.Add("唤醒服务: 未初始化");
+            }
+
+            // 外部 ASR 状态
+            if (_plugin.ExternalAsr != null && !string.IsNullOrWhiteSpace(_plugin.Settings.AsrApiUrl))
+            {
+                lines.Add($"外部 ASR: 已配置 ({_plugin.Settings.AsrApiUrl})");
+            }
+            else
+            {
+                lines.Add("外部 ASR: 未配置");
+            }
+
             // 模型目录
             if (_plugin.ModelsPath != null)
             {
@@ -329,62 +416,51 @@ namespace VPet.Plugin.VoiceprintRecognition
 
         #region 声纹管理事件
 
-        private async void BtnRegisterVoiceprint_Click(object sender, RoutedEventArgs e)
+        private void BtnRegisterVoiceprint_Click(object sender, RoutedEventArgs e)
         {
             if (_plugin.Recognizer == null)
             {
+                _plugin.LogMessage("注册声纹失败: 声纹识别引擎未初始化");
                 MessageBox.Show("声纹识别引擎未初始化，请先配置声纹模型。", "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
-            var inputDialog = new InputDialog("注册声纹", "请输入用户名:");
-            if (inputDialog.ShowDialog() != true || string.IsNullOrWhiteSpace(inputDialog.InputText))
+            if (_plugin.AudioCapture == null)
+            {
+                _plugin.LogMessage("注册声纹失败: 音频采集器未初始化");
+                MessageBox.Show("音频采集器未初始化。", "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
+            }
 
-            string userName = inputDialog.InputText.Trim();
-            string userId = Guid.NewGuid().ToString("N").Substring(0, 8);
+            // 如果唤醒监听正在运行，暂停它
+            bool wasMonitoring = _plugin.WakeupService?.IsMonitoring == true;
+            if (wasMonitoring)
+            {
+                _plugin.WakeupService.StopMonitoring();
+                _plugin.LogDebug("注册声纹: 暂停唤醒监听");
+            }
 
             try
             {
-                MessageBox.Show("点击确定后开始录音，请说话 3-5 秒，然后点击确定结束。", "录音", MessageBoxButton.OK, MessageBoxImage.Information);
+                var dialog = new VoiceprintRegistrationDialog(_plugin);
+                dialog.Owner = this;
+                dialog.ShowDialog();
 
-                _plugin.AudioCapture?.StartCapture();
-
-                MessageBox.Show("录音中...点击确定结束录音。", "录音", MessageBoxButton.OK, MessageBoxImage.Information);
-
-                var audioData = _plugin.AudioCapture?.StopCapture();
-
-                if (audioData == null || audioData.Length < 16000 * 2)
+                if (dialog.RegistrationSuccess)
                 {
-                    MessageBox.Show("录音数据不足，请重试。", "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
-                    return;
-                }
-
-                BtnRegisterVoiceprint.IsEnabled = false;
-                string originalContent = BtnRegisterVoiceprint.Content?.ToString();
-                BtnRegisterVoiceprint.Content = "注册中...";
-
-                bool success = await _plugin.Recognizer.RegisterVoiceprintAsync(userId, userName, audioData);
-
-                if (success)
-                {
-                    MessageBox.Show($"声纹注册成功！用户: {userName}", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
                     LoadVoiceprintList();
                     UpdateModelInfo();
                 }
-                else
-                {
-                    MessageBox.Show("声纹注册失败，请重试。", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                }
-
-                BtnRegisterVoiceprint.IsEnabled = true;
-                BtnRegisterVoiceprint.Content = originalContent;
             }
-            catch (Exception ex)
+            finally
             {
-                MessageBox.Show($"注册失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
-                BtnRegisterVoiceprint.IsEnabled = true;
-                BtnRegisterVoiceprint.Content = "\U0001F3A4 注册新声纹";
+                // 恢复唤醒监听
+                if (wasMonitoring)
+                {
+                    _plugin.WakeupService?.StartMonitoring();
+                    _plugin.LogDebug("注册声纹: 恢复唤醒监听");
+                }
+                UpdateMonitoringStatus();
             }
         }
 
@@ -407,9 +483,14 @@ namespace VPet.Plugin.VoiceprintRecognition
             {
                 if (_plugin.Recognizer?.RemoveVoiceprint(userId) == true)
                 {
+                    _plugin.LogMessage($"声纹已删除: {userId}");
                     LoadVoiceprintList();
                     UpdateModelInfo();
                     MessageBox.Show("声纹已删除。", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    _plugin.LogMessage($"删除声纹失败: {userId}");
                 }
             }
         }
@@ -498,6 +579,10 @@ namespace VPet.Plugin.VoiceprintRecognition
 
         private async void BtnTestMic_Click(object sender, RoutedEventArgs e)
         {
+            bool wasMonitoring = _plugin.WakeupService?.IsMonitoring == true;
+            if (wasMonitoring)
+                _plugin.WakeupService.StopMonitoring();
+
             try
             {
                 _plugin.LogMessage("开始麦克风测试...");
@@ -550,6 +635,12 @@ namespace VPet.Plugin.VoiceprintRecognition
                 MessageBox.Show($"测试失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
                 BtnTestMic.IsEnabled = true;
                 BtnTestMic.Content = "\U0001F3A4 测试麦克风";
+            }
+            finally
+            {
+                if (wasMonitoring)
+                    _plugin.WakeupService?.StartMonitoring();
+                UpdateMonitoringStatus();
             }
         }
 
@@ -639,10 +730,309 @@ namespace VPet.Plugin.VoiceprintRecognition
 
         #endregion
 
+        #region 唤醒设置事件
+
+        private void CheckEnableWakeup_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null && sender is CheckBox cb)
+                _settings.EnableWakeup = cb.IsChecked == true;
+        }
+
+        private void CheckWakeupAutoSend_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null && sender is CheckBox cb)
+                _settings.WakeupAutoSend = cb.IsChecked == true;
+        }
+
+        private void SliderWakeupCooldown_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings != null)
+                _settings.WakeupCooldown = (float)SliderWakeupCooldown.Value;
+        }
+
+        private void SliderWakeWordThreshold_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings != null)
+                _settings.WakeWordThreshold = (float)SliderWakeWordThreshold.Value;
+        }
+
+        private void RadioWakeMode_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_settings == null) return;
+            _settings.UseWindowsSpeech = RadioWindowsSpeech.IsChecked == true;
+            UpdateWakeModeVisibility();
+        }
+
+        private void SliderWinSpeechConfidence_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings != null)
+                _settings.WindowsSpeechConfidence = (float)SliderWinSpeechConfidence.Value;
+        }
+
+        private void SliderDictationTimeout_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings != null)
+                _settings.DictationTimeout = (float)SliderDictationTimeout.Value;
+        }
+
+        private void ComboWinSpeechCulture_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_settings != null && sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item)
+                _settings.WindowsSpeechCulture = item.Tag?.ToString() ?? "zh-CN";
+        }
+
+        /// <summary>
+        /// 根据唤醒模式切换 UI 可见性
+        /// </summary>
+        private void UpdateWakeModeVisibility()
+        {
+            if (GroupCustomMode == null || GroupWindowsSpeech == null || GroupExternalAsr == null)
+                return;
+
+            bool useWindowsSpeech = RadioWindowsSpeech.IsChecked == true;
+
+            GroupCustomMode.Visibility = useWindowsSpeech ? Visibility.Collapsed : Visibility.Visible;
+            GroupExternalAsr.Visibility = useWindowsSpeech ? Visibility.Collapsed : Visibility.Visible;
+            GroupWindowsSpeech.Visibility = useWindowsSpeech ? Visibility.Visible : Visibility.Collapsed;
+        }
+
+        private void TextAsrApiUrl_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_settings != null && sender is TextBox tb)
+                _settings.AsrApiUrl = tb.Text;
+        }
+
+        private void PasswordAsrApiKey_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_settings != null && sender is PasswordBox pb)
+                _settings.AsrApiKey = pb.Password;
+        }
+
+        private void ComboAsrFormat_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_settings != null && sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item)
+                _settings.AsrRequestFormat = item.Tag?.ToString() ?? "multipart";
+        }
+
+        private void TextAsrResponsePath_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_settings != null && sender is TextBox tb)
+                _settings.AsrResponseTextPath = tb.Text;
+        }
+
+        private void ComboAsrLanguage_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        {
+            if (_settings != null && sender is ComboBox cb && cb.SelectedItem is ComboBoxItem item)
+                _settings.AsrLanguage = item.Tag?.ToString() ?? "zh";
+        }
+
+        private void SliderAsrTimeout_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings != null)
+                _settings.AsrTimeout = (int)SliderAsrTimeout.Value;
+        }
+
+        private void BtnStartMonitoring_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                // 先保存当前设置到插件
+                _plugin.Settings = _settings;
+
+                if (_settings.UseWindowsSpeech)
+                {
+                    // Windows 语音模式
+                    if (_plugin.WindowsSpeech?.IsListening == true)
+                    {
+                        UpdateMonitoringStatus();
+                        return;
+                    }
+
+                    // 需要先初始化
+                    if (_plugin.WindowsSpeech == null)
+                    {
+                        _plugin.ReloadWakeupService();
+                    }
+
+                    if (_plugin.WindowsSpeech != null)
+                    {
+                        _plugin.WindowsSpeech.Start();
+                        UpdateMonitoringStatus();
+                    }
+                    else
+                    {
+                        MessageBox.Show("Windows 语音识别服务初始化失败，请确保：\n1. 已注册声纹\n2. Windows 已安装对应语言的语音识别包",
+                            "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+                else
+                {
+                    // 自定义模式
+                    if (_plugin.WakeupService?.IsMonitoring == true)
+                    {
+                        UpdateMonitoringStatus();
+                        return;
+                    }
+
+                    if (_plugin.WakeupService == null)
+                    {
+                        _plugin.ReloadWakeupService();
+                    }
+
+                    if (_plugin.WakeupService != null)
+                    {
+                        _plugin.WakeupService.StartMonitoring();
+                        UpdateMonitoringStatus();
+                    }
+                    else
+                    {
+                        MessageBox.Show("唤醒服务未初始化，请确保声纹模型已加载且有注册声纹。",
+                            "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"启动监听失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void BtnStopMonitoring_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                _plugin.WakeupService?.StopMonitoring();
+                _plugin.WindowsSpeech?.Stop();
+                UpdateMonitoringStatus();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"停止监听失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
+
+        private void UpdateMonitoringStatus()
+        {
+            if (TextBlockMonitoringStatus == null) return;
+
+            bool isMonitoring = _plugin.WakeupService?.IsMonitoring == true
+                             || _plugin.WindowsSpeech?.IsListening == true;
+
+            string statusText;
+            if (isMonitoring)
+            {
+                statusText = _plugin.WindowsSpeech?.IsListening == true
+                    ? "Windows 语音监听中..."
+                    : "自定义模式监听中...";
+            }
+            else
+            {
+                statusText = "未启动";
+            }
+
+            TextBlockMonitoringStatus.Text = statusText;
+            TextBlockMonitoringStatus.Foreground = isMonitoring
+                ? new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0, 128, 0))
+                : new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(102, 102, 102));
+
+            BtnStartMonitoring.IsEnabled = !isMonitoring;
+            BtnStopMonitoring.IsEnabled = isMonitoring;
+        }
+
+        private async void BtnTestAsr_Click(object sender, RoutedEventArgs e)
+        {
+            // 暂停监听
+            bool wasMonitoring = _plugin.WakeupService?.IsMonitoring == true;
+            if (wasMonitoring)
+            {
+                _plugin.WakeupService.StopMonitoring();
+                _plugin.LogDebug("ASR 测试: 暂停唤醒监听");
+            }
+
+            try
+            {
+                if (string.IsNullOrWhiteSpace(_settings.AsrApiUrl))
+                {
+                    MessageBox.Show("请先配置 ASR API URL。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                if (_plugin.AudioCapture == null)
+                {
+                    MessageBox.Show("音频采集器未初始化。", "提示", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    return;
+                }
+
+                _plugin.LogMessage("开始 ASR 测试...");
+                BtnTestAsr.IsEnabled = false;
+                TextBlockAsrTestStatus.Text = "录音中...";
+
+                MessageBox.Show("点击确定后开始录音，请说话，然后点击确定结束。", "ASR 测试", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                _plugin.AudioCapture.StartCapture();
+
+                MessageBox.Show("录音中...点击确定结束录音。", "ASR 测试", MessageBoxButton.OK, MessageBoxImage.Information);
+
+                var audioData = _plugin.AudioCapture.StopCapture();
+
+                if (audioData == null || audioData.Length < 16000 * 2)
+                {
+                    TextBlockAsrTestStatus.Text = "录音数据不足";
+                    MessageBox.Show("录音数据不足，请重试。", "错误", MessageBoxButton.OK, MessageBoxImage.Warning);
+                    BtnTestAsr.IsEnabled = true;
+                    return;
+                }
+
+                TextBlockAsrTestStatus.Text = "调用 ASR API...";
+
+                // 创建临时 ASR 服务使用当前设置
+                using var tempAsr = new ExternalAsrService(_settings,
+                    logInfo: _plugin.LogMessage, logDebug: _plugin.LogDebug);
+
+                var text = await tempAsr.TranscribeAsync(audioData);
+
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    TextBlockAsrTestStatus.Text = $"识别成功";
+                    _plugin.LogMessage($"ASR 测试结果: {text}");
+                    MessageBox.Show($"识别结果:\n{text}", "ASR 测试", MessageBoxButton.OK, MessageBoxImage.Information);
+                }
+                else
+                {
+                    TextBlockAsrTestStatus.Text = "未识别到内容";
+                    MessageBox.Show("未识别到语音内容，请检查 API 配置。", "ASR 测试", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
+            }
+            catch (Exception ex)
+            {
+                _plugin.LogMessage($"ASR 测试异常: {ex.Message}");
+                TextBlockAsrTestStatus.Text = $"测试失败";
+                MessageBox.Show($"ASR 测试失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+            finally
+            {
+                BtnTestAsr.IsEnabled = true;
+
+                // 恢复监听
+                if (wasMonitoring)
+                {
+                    _plugin.WakeupService?.StartMonitoring();
+                    _plugin.LogDebug("ASR 测试: 恢复唤醒监听");
+                }
+                UpdateMonitoringStatus();
+            }
+        }
+
+        #endregion
+
         #region 底部按钮事件
 
         private void BtnTestVoice_Click(object sender, RoutedEventArgs e)
         {
+            bool wasMonitoring = _plugin.WakeupService?.IsMonitoring == true;
+            if (wasMonitoring)
+                _plugin.WakeupService.StopMonitoring();
+
             try
             {
                 _plugin.LogMessage("开始语音测试...");
@@ -689,6 +1079,12 @@ namespace VPet.Plugin.VoiceprintRecognition
                 _plugin.LogDebug($"异常详情: {ex}");
                 MessageBox.Show($"语音测试失败: {ex.Message}", "错误", MessageBoxButton.OK, MessageBoxImage.Error);
             }
+            finally
+            {
+                if (wasMonitoring)
+                    _plugin.WakeupService?.StartMonitoring();
+                UpdateMonitoringStatus();
+            }
         }
 
         private void BtnSave_Click(object sender, RoutedEventArgs e)
@@ -705,11 +1101,15 @@ namespace VPet.Plugin.VoiceprintRecognition
                 // 重新加载组件
                 _plugin.ReloadRecognizer();
                 _plugin.ReloadSpeechToText();
+                _plugin.ReloadWakeupService();
 
                 MessageBox.Show("设置已保存！", "成功", MessageBoxButton.OK, MessageBoxImage.Information);
 
                 // 更新原始设置
                 _originalSettings = _settings.Clone();
+
+                // 更新监听状态
+                UpdateMonitoringStatus();
             }
             catch (Exception ex)
             {

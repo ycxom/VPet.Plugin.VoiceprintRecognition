@@ -177,6 +177,147 @@
                 </ScrollViewer>
             </TabItem>
 
+            <!-- 唤醒设置 Tab -->
+            <TabItem Header="&#x1F514; 唤醒设置">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="20">
+                    <StackPanel>
+                        <!-- 唤醒监听 -->
+                        <GroupBox Header="唤醒监听" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <CheckBox x:Name="CheckEnableWakeup" Content="启用声纹唤醒监听" Margin="0,5"
+                                        Checked="CheckEnableWakeup_Changed" Unchecked="CheckEnableWakeup_Changed"/>
+
+                                <CheckBox x:Name="CheckWakeupAutoSend" Content="自动发送识别结果（否则填入输入框等待确认）" Margin="0,5"
+                                        Checked="CheckWakeupAutoSend_Changed" Unchecked="CheckWakeupAutoSend_Changed"/>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,5">
+                                    <TextBlock Text="冷却时间:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderWakeupCooldown" Width="200" Minimum="0.5" Maximum="10" Value="2" TickFrequency="0.5" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderWakeupCooldown_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderWakeupCooldown, Path=Value, StringFormat={}{0:F1} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 唤醒后的冷却时间，防止重复触发" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 唤醒模式选择 -->
+                        <GroupBox Header="唤醒模式" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <RadioButton x:Name="RadioCustomMode" Content="自定义模式 (Mel 频谱匹配 + 外部 ASR)" Margin="0,5" GroupName="WakeMode"
+                                           Checked="RadioWakeMode_Changed"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 使用 Mel 频谱 DTW 匹配唤醒词 + 外部 ASR API 转文字" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                                <RadioButton x:Name="RadioWindowsSpeech" Content="Windows 语音识别模式 (模仿 Cortana)" Margin="0,10,0,5" GroupName="WakeMode"
+                                           Checked="RadioWakeMode_Changed"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 使用 Windows 自带语音识别引擎，唤醒词为声纹注册时的用户名" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 自定义模式设置 -->
+                        <GroupBox x:Name="GroupCustomMode" Header="自定义模式设置" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                    <TextBlock Text="唤醒词匹配阈值:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderWakeWordThreshold" Width="180" Minimum="0.1" Maximum="0.95" Value="0.55" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderWakeWordThreshold_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderWakeWordThreshold, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 唤醒词 Mel 频谱匹配阈值，值越高要求越严格（建议 0.45~0.65）" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- Windows 语音模式设置 -->
+                        <GroupBox x:Name="GroupWindowsSpeech" Header="Windows 语音识别设置" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                    <TextBlock Text="关键词置信度:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderWinSpeechConfidence" Width="180" Minimum="0.3" Maximum="0.95" Value="0.7" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderWinSpeechConfidence_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderWinSpeechConfidence, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                    <TextBlock Text="听写超时:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderDictationTimeout" Width="180" Minimum="3" Maximum="30" Value="10" TickFrequency="1" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderDictationTimeout_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderDictationTimeout, Path=Value, StringFormat={}{0:F0} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                    <TextBlock Text="识别语言:" VerticalAlignment="Center" Width="100"/>
+                                    <ComboBox x:Name="ComboWinSpeechCulture" Width="150" SelectionChanged="ComboWinSpeechCulture_SelectionChanged">
+                                        <ComboBoxItem Content="中文 (zh-CN)" Tag="zh-CN"/>
+                                        <ComboBoxItem Content="English (en-US)" Tag="en-US"/>
+                                        <ComboBoxItem Content="日本語 (ja-JP)" Tag="ja-JP"/>
+                                    </ComboBox>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 需要 Windows 已安装对应语言的语音识别包" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 唤醒词使用声纹注册时的用户名（如「你好小桃」）" Foreground="#999999" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 监听控制 -->
+                        <GroupBox Header="监听控制" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,0">
+                                    <Button x:Name="BtnStartMonitoring" Content="&#x25B6; 开始监听" Width="120" Margin="0,0,10,0" Click="BtnStartMonitoring_Click"/>
+                                    <Button x:Name="BtnStopMonitoring" Content="&#x23F9; 停止监听" Width="120" Margin="0,0,10,0" Click="BtnStopMonitoring_Click"/>
+                                    <TextBlock x:Name="TextBlockMonitoringStatus" Text="未启动" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="#666666"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+
+                        <!-- 外部 ASR 设置 -->
+                        <GroupBox x:Name="GroupExternalAsr" Header="&#x1F310; 外部 ASR API" Margin="0,0,0,20">
+                            <StackPanel Margin="10">
+                                <TextBlock Text="API URL:" Margin="0,5,0,2"/>
+                                <TextBox x:Name="TextAsrApiUrl" Margin="0,0,0,10" TextChanged="TextAsrApiUrl_TextChanged"/>
+
+                                <TextBlock Text="API Key:" Margin="0,5,0,2"/>
+                                <PasswordBox x:Name="PasswordAsrApiKey" Margin="0,0,0,10" PasswordChanged="PasswordAsrApiKey_Changed"/>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,10">
+                                    <TextBlock Text="请求格式:" VerticalAlignment="Center" Width="80"/>
+                                    <ComboBox x:Name="ComboAsrFormat" Width="200" SelectionChanged="ComboAsrFormat_SelectionChanged">
+                                        <ComboBoxItem Content="Multipart (表单上传)" Tag="multipart"/>
+                                        <ComboBoxItem Content="Base64 JSON" Tag="base64json"/>
+                                        <ComboBoxItem Content="Raw Binary" Tag="rawbinary"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,10">
+                                    <TextBlock Text="响应路径:" VerticalAlignment="Center" Width="80"/>
+                                    <TextBox x:Name="TextAsrResponsePath" Width="200" TextChanged="TextAsrResponsePath_TextChanged"/>
+                                    <TextBlock Text="如: result 或 data.text" Foreground="#999999" FontSize="11" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,10">
+                                    <TextBlock Text="语言:" VerticalAlignment="Center" Width="80"/>
+                                    <ComboBox x:Name="ComboAsrLanguage" Width="150" SelectionChanged="ComboAsrLanguage_SelectionChanged">
+                                        <ComboBoxItem Content="中文" Tag="zh"/>
+                                        <ComboBoxItem Content="English" Tag="en"/>
+                                        <ComboBoxItem Content="日本語" Tag="ja"/>
+                                        <ComboBoxItem Content="한국어" Tag="ko"/>
+                                        <ComboBoxItem Content="自动检测" Tag="auto"/>
+                                    </ComboBox>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,10">
+                                    <TextBlock Text="超时时间:" VerticalAlignment="Center" Width="80"/>
+                                    <Slider x:Name="SliderAsrTimeout" Width="200" Minimum="5" Maximum="120" Value="30" TickFrequency="5" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderAsrTimeout_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderAsrTimeout, Path=Value, StringFormat={}{0:F0} 秒}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                                    <Button x:Name="BtnTestAsr" Content="&#x1F3A4; 测试 ASR" Width="140" Click="BtnTestAsr_Click"/>
+                                    <TextBlock x:Name="TextBlockAsrTestStatus" Text="" VerticalAlignment="Center" Margin="10,0,0,0" FontSize="12" Foreground="#666666"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </GroupBox>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <!-- 调试 Tab -->
             <TabItem Header="&#x1F527; 调试">
                 <Grid Margin="20">

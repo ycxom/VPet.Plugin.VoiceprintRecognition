@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -120,6 +121,84 @@ namespace VPet.Plugin.VoiceprintRecognition
 
         #endregion
 
+        #region 唤醒监听设置
+
+        /// <summary>
+        /// 是否启用声纹唤醒监听
+        /// </summary>
+        public bool EnableWakeup { get; set; } = false;
+
+        /// <summary>
+        /// 唤醒后自动发送文字（否则填入输入框等待手动确认）
+        /// </summary>
+        public bool WakeupAutoSend { get; set; } = false;
+
+        /// <summary>
+        /// 唤醒冷却时间（秒）
+        /// </summary>
+        public float WakeupCooldown { get; set; } = 2.0f;
+
+        /// <summary>
+        /// 唤醒词能量包络匹配阈值 (0~1)
+        /// </summary>
+        public float WakeWordThreshold { get; set; } = 0.55f;
+
+        /// <summary>
+        /// 是否使用 Windows 语音识别模式（否则使用自定义 Mel DTW + 外部 ASR）
+        /// </summary>
+        public bool UseWindowsSpeech { get; set; } = false;
+
+        /// <summary>
+        /// Windows 语音识别关键词最低置信度 (0~1)
+        /// </summary>
+        public float WindowsSpeechConfidence { get; set; } = 0.7f;
+
+        /// <summary>
+        /// Windows 语音识别听写模式超时（秒）
+        /// </summary>
+        public float DictationTimeout { get; set; } = 10.0f;
+
+        /// <summary>
+        /// Windows 语音识别文化/语言
+        /// </summary>
+        public string WindowsSpeechCulture { get; set; } = "zh-CN";
+
+        #endregion
+
+        #region 外部 ASR 设置
+
+        /// <summary>
+        /// 外部 ASR API URL
+        /// </summary>
+        public string AsrApiUrl { get; set; } = "";
+
+        /// <summary>
+        /// 外部 ASR API Key
+        /// </summary>
+        public string AsrApiKey { get; set; } = "";
+
+        /// <summary>
+        /// ASR 请求格式: multipart, base64json, rawbinary
+        /// </summary>
+        public string AsrRequestFormat { get; set; } = "multipart";
+
+        /// <summary>
+        /// ASR 响应文本 JSON 路径（如 "result" 或 "data.text"）
+        /// </summary>
+        public string AsrResponseTextPath { get; set; } = "result";
+
+        /// <summary>
+        /// ASR 语言
+        /// </summary>
+        public string AsrLanguage { get; set; } = "zh";
+
+        /// <summary>
+        /// ASR 请求超时（秒）
+        /// </summary>
+        public int AsrTimeout { get; set; } = 30;
+
+        #endregion
+
         #region 调试设置
 
         /// <summary>
@@ -209,6 +288,20 @@ namespace VPet.Plugin.VoiceprintRecognition
                 SilenceTimeout = this.SilenceTimeout,
                 UseGPU = this.UseGPU,
                 NumThreads = this.NumThreads,
+                EnableWakeup = this.EnableWakeup,
+                WakeupAutoSend = this.WakeupAutoSend,
+                WakeupCooldown = this.WakeupCooldown,
+                WakeWordThreshold = this.WakeWordThreshold,
+                UseWindowsSpeech = this.UseWindowsSpeech,
+                WindowsSpeechConfidence = this.WindowsSpeechConfidence,
+                DictationTimeout = this.DictationTimeout,
+                WindowsSpeechCulture = this.WindowsSpeechCulture,
+                AsrApiUrl = this.AsrApiUrl,
+                AsrApiKey = this.AsrApiKey,
+                AsrRequestFormat = this.AsrRequestFormat,
+                AsrResponseTextPath = this.AsrResponseTextPath,
+                AsrLanguage = this.AsrLanguage,
+                AsrTimeout = this.AsrTimeout,
                 DebugMode = this.DebugMode,
                 SaveRecordings = this.SaveRecordings
             };
@@ -235,6 +328,27 @@ namespace VPet.Plugin.VoiceprintRecognition
             // 确保录音时长有效
             MinRecordingDuration = Math.Max(0.5f, MinRecordingDuration);
             MaxRecordingDuration = Math.Max(MinRecordingDuration + 1, MaxRecordingDuration);
+
+            // 唤醒冷却时间
+            WakeupCooldown = Math.Clamp(WakeupCooldown, 0.5f, 10.0f);
+
+            // 唤醒词匹配阈值
+            WakeWordThreshold = Math.Clamp(WakeWordThreshold, 0.1f, 0.95f);
+
+            // Windows 语音识别设置
+            WindowsSpeechConfidence = Math.Clamp(WindowsSpeechConfidence, 0.3f, 0.95f);
+            DictationTimeout = Math.Clamp(DictationTimeout, 3.0f, 30.0f);
+            var validCultures = new[] { "zh-CN", "en-US", "ja-JP" };
+            if (!validCultures.Contains(WindowsSpeechCulture))
+                WindowsSpeechCulture = "zh-CN";
+
+            // ASR 超时
+            AsrTimeout = Math.Clamp(AsrTimeout, 5, 120);
+
+            // ASR 请求格式
+            var validFormats = new[] { "multipart", "base64json", "rawbinary" };
+            if (!validFormats.Contains(AsrRequestFormat))
+                AsrRequestFormat = "multipart";
         }
     }
 }

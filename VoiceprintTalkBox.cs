@@ -29,6 +29,11 @@ namespace VPet.Plugin.VoiceprintRecognition
         private Border _voiceprintIndicator;
 
         /// <summary>
+        /// 唤醒状态指示器
+        /// </summary>
+        private Border _wakeupIndicator;
+
+        /// <summary>
         /// 是否正在录音
         /// </summary>
         private bool _isRecording = false;
@@ -43,6 +48,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         public VoiceprintTalkBox(VoiceprintPlugin plugin) : base(plugin)
         {
             _plugin = plugin;
+            _plugin.SetTalkBox(this);
             InitializeVoiceButton();
         }
 
@@ -76,6 +82,21 @@ namespace VPet.Plugin.VoiceprintRecognition
                 };
                 Grid.SetColumn(_voiceprintIndicator, 3);
                 MainGrid.Children.Add(_voiceprintIndicator);
+
+                // 创建唤醒状态指示器
+                _wakeupIndicator = new Border
+                {
+                    Width = 8,
+                    Height = 8,
+                    CornerRadius = new CornerRadius(4),
+                    Background = Brushes.Gray,
+                    VerticalAlignment = VerticalAlignment.Center,
+                    Margin = new Thickness(3, 0, 0, 0),
+                    ToolTip = "唤醒监听未启动",
+                    Visibility = _plugin.Settings.EnableWakeup ? Visibility.Visible : Visibility.Collapsed
+                };
+                Grid.SetColumn(_wakeupIndicator, 3);
+                MainGrid.Children.Add(_wakeupIndicator);
 
                 // 添加语音按钮列
                 MainGrid.ColumnDefinitions.Add(new ColumnDefinition() { Width = new GridLength(0, GridUnitType.Auto) });
@@ -368,6 +389,170 @@ namespace VPet.Plugin.VoiceprintRecognition
             catch (Exception ex)
             {
                 _plugin.LogMessage($"更新按钮可见性失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 唤醒文字接收处理
+        /// </summary>
+        public void OnWakeupTextReceived(string text, bool autoSend)
+        {
+            if (string.IsNullOrWhiteSpace(text)) return;
+
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    // 更新唤醒指示器
+                    UpdateWakeupIndicator(true);
+
+                    if (autoSend)
+                    {
+                        _plugin.LogMessage($"唤醒自动发送: {text}");
+                        Responded(text);
+                    }
+                    else
+                    {
+                        _plugin.LogMessage($"唤醒弹窗确认: {text}");
+                        ShowWakeupInputDialog(text);
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _plugin.LogMessage($"处理唤醒文字失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 显示唤醒文字确认弹窗
+        /// </summary>
+        private void ShowWakeupInputDialog(string text)
+        {
+            var dialog = new Window
+            {
+                Title = "语音唤醒",
+                Width = 420,
+                Height = 200,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize,
+                Topmost = true,
+                ShowInTaskbar = false,
+                Background = SystemColors.WindowBrush
+            };
+
+            var grid = new Grid { Margin = new Thickness(15) };
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+            grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+            grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+            var label = new TextBlock
+            {
+                Text = "已唤醒，识别到以下内容：",
+                FontSize = 14,
+                Margin = new Thickness(0, 0, 0, 8)
+            };
+            Grid.SetRow(label, 0);
+            grid.Children.Add(label);
+
+            var textBox = new TextBox
+            {
+                Text = text,
+                FontSize = 14,
+                TextWrapping = TextWrapping.Wrap,
+                AcceptsReturn = false,
+                VerticalContentAlignment = VerticalAlignment.Center,
+                Padding = new Thickness(6, 4, 6, 4)
+            };
+            textBox.SelectAll();
+            Grid.SetRow(textBox, 1);
+            grid.Children.Add(textBox);
+
+            var buttonPanel = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                Margin = new Thickness(0, 12, 0, 0)
+            };
+
+            var btnSend = new Button
+            {
+                Content = "发送",
+                Width = 80,
+                Height = 30,
+                Margin = new Thickness(0, 0, 10, 0),
+                IsDefault = true
+            };
+            btnSend.Click += (s, e) =>
+            {
+                var finalText = textBox.Text?.Trim();
+                dialog.Close();
+                if (!string.IsNullOrWhiteSpace(finalText))
+                {
+                    _plugin.LogMessage($"唤醒确认发送: {finalText}");
+                    Responded(finalText);
+                }
+            };
+
+            var btnCancel = new Button
+            {
+                Content = "取消",
+                Width = 80,
+                Height = 30,
+                IsCancel = true
+            };
+            btnCancel.Click += (s, e) =>
+            {
+                _plugin.LogMessage("唤醒输入已取消");
+                dialog.Close();
+            };
+
+            buttonPanel.Children.Add(btnSend);
+            buttonPanel.Children.Add(btnCancel);
+            Grid.SetRow(buttonPanel, 2);
+            grid.Children.Add(buttonPanel);
+
+            dialog.Content = grid;
+            dialog.Loaded += (s, e) => textBox.Focus();
+            dialog.Show();
+        }
+
+        /// <summary>
+        /// 更新唤醒状态指示器
+        /// </summary>
+        public void UpdateWakeupIndicator(bool wakeupTriggered = false)
+        {
+            try
+            {
+                Dispatcher.Invoke(() =>
+                {
+                    if (_wakeupIndicator == null) return;
+
+                    bool isMonitoring = _plugin.WakeupService?.IsMonitoring == true
+                                     || _plugin.WindowsSpeech?.IsListening == true;
+                    _wakeupIndicator.Visibility = _plugin.Settings.EnableWakeup
+                        ? Visibility.Visible : Visibility.Collapsed;
+
+                    if (wakeupTriggered)
+                    {
+                        _wakeupIndicator.Background = Brushes.LimeGreen;
+                        _wakeupIndicator.ToolTip = "已唤醒";
+                    }
+                    else if (isMonitoring)
+                    {
+                        _wakeupIndicator.Background = Brushes.DodgerBlue;
+                        _wakeupIndicator.ToolTip = "监听中...";
+                    }
+                    else
+                    {
+                        _wakeupIndicator.Background = Brushes.Gray;
+                        _wakeupIndicator.ToolTip = "唤醒监听未启动";
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                _plugin.LogMessage($"更新唤醒指示器失败: {ex.Message}");
             }
         }
 

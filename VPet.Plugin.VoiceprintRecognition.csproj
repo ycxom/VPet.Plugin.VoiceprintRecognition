@@ -39,6 +39,9 @@
     <!-- 音频处理 -->
     <PackageReference Include="NAudio" Version="2.2.1" />
 
+    <!-- Windows 语音识别 -->
+    <PackageReference Include="System.Speech" Version="8.0.0" />
+
     <!-- JSON 序列化 -->
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
@@ -47,6 +50,7 @@
   <!-- 编译后自动复制 DLL 到 plugin 目录 -->
   <Target Name="CopyToPlugin" AfterTargets="Build">
     <MakeDir Directories="$(ProjectDir)1103_VoiceprintRecognition\plugin\" Condition="!Exists('$(ProjectDir)1103_VoiceprintRecognition\plugin\')" />
+    <MakeDir Directories="$(ProjectDir)1103_VoiceprintRecognition\plugin\runtimes\" Condition="!Exists('$(ProjectDir)1103_VoiceprintRecognition\plugin\runtimes\')" />
     <MakeDir Directories="$(ProjectDir)1103_VoiceprintRecognition\models\" Condition="!Exists('$(ProjectDir)1103_VoiceprintRecognition\models\')" />
     <ItemGroup>
       <!-- 只复制插件自身和托管 ONNX Runtime (不复制 native dll，会导致 BadImageFormatException) -->
@@ -54,5 +58,9 @@
       <PluginFiles Include="$(OutputPath)Microsoft.ML.OnnxRuntime.dll" />
     </ItemGroup>
     <Copy SourceFiles="@(PluginFiles)" DestinationFolder="$(ProjectDir)1103_VoiceprintRecognition\plugin\" SkipUnchangedFiles="true" />
+    <!-- System.Speech: 输出根目录的是平台检测 stub，必须复制 runtimes\win 下的真正实现到独立子目录 -->
+    <Copy SourceFiles="$(OutputPath)runtimes\win\lib\net8.0\System.Speech.dll" DestinationFolder="$(ProjectDir)1103_VoiceprintRecognition\plugin\runtimes\" SkipUnchangedFiles="true" />
+    <!-- 删除 plugin 根目录下的 stub（如果之前残留的话） -->
+    <Delete Files="$(ProjectDir)1103_VoiceprintRecognition\plugin\System.Speech.dll" Condition="Exists('$(ProjectDir)1103_VoiceprintRecognition\plugin\System.Speech.dll')" />
   </Target>
 </Project>
