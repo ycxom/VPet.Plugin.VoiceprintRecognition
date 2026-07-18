@@ -21,7 +21,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         private readonly ManualResetEventSlim _stoppedEvent = new ManualResetEventSlim(true);
 
         // 环形缓冲区：监听模式下保留最近 N 秒音频，用于声纹验证
-        private const int RING_BUFFER_SECONDS = 5;
+        private const int RING_BUFFER_SECONDS = 15;
         private readonly Queue<byte[]> _monitoringRingBuffer = new Queue<byte[]>();
         private int _ringBufferTotalBytes = 0;
         private readonly object _ringBufferLock = new object();
@@ -136,6 +136,12 @@ namespace VPet.Plugin.VoiceprintRecognition
                 _isRecording = false;
                 _waveIn.StopRecording();
 
+                // 等待 NAudio 完全停止（解决 StopRecording 异步问题）
+                if (!_stoppedEvent.Wait(2000))
+                {
+                    Console.WriteLine("[音频采集] StopCapture: 等待停止超时");
+                }
+
                 var audioData = _audioStream?.ToArray();
                 _audioStream?.Dispose();
                 _audioStream = null;
@@ -146,6 +152,7 @@ namespace VPet.Plugin.VoiceprintRecognition
             catch (Exception ex)
             {
                 Console.WriteLine($"[音频采集] 停止录音失败: {ex.Message}");
+                _stoppedEvent.Set();
                 return null;
             }
         }
@@ -193,11 +200,19 @@ namespace VPet.Plugin.VoiceprintRecognition
             {
                 _isMonitoring = false;
                 _waveIn.StopRecording();
+
+                // 等待 NAudio 完全停止
+                if (!_stoppedEvent.Wait(2000))
+                {
+                    Console.WriteLine("[音频采集] StopMonitoring: 等待停止超时");
+                }
+
                 Console.WriteLine("[音频采集] 停止监听模式");
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[音频采集] 停止监听失败: {ex.Message}");
+                _stoppedEvent.Set();
             }
         }
 

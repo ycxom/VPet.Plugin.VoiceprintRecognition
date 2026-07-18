@@ -144,6 +144,11 @@ namespace VPet.Plugin.VoiceprintRecognition
         public float WakeWordThreshold { get; set; } = 0.55f;
 
         /// <summary>
+        /// 唤醒时声纹验证阈值（余弦相似度，比主阈值更低，因为关键词语法已提供第一层验证）
+        /// </summary>
+        public float WakeupVoiceprintThreshold { get; set; } = 0.45f;
+
+        /// <summary>
         /// 是否使用 Windows 语音识别模式（否则使用自定义 Mel DTW + 外部 ASR）
         /// </summary>
         public bool UseWindowsSpeech { get; set; } = false;
@@ -151,7 +156,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// <summary>
         /// Windows 语音识别关键词最低置信度 (0~1)
         /// </summary>
-        public float WindowsSpeechConfidence { get; set; } = 0.7f;
+        public float WindowsSpeechConfidence { get; set; } = 0.5f;
 
         /// <summary>
         /// Windows 语音识别听写模式超时（秒）
@@ -292,6 +297,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                 WakeupAutoSend = this.WakeupAutoSend,
                 WakeupCooldown = this.WakeupCooldown,
                 WakeWordThreshold = this.WakeWordThreshold,
+                WakeupVoiceprintThreshold = this.WakeupVoiceprintThreshold,
                 UseWindowsSpeech = this.UseWindowsSpeech,
                 WindowsSpeechConfidence = this.WindowsSpeechConfidence,
                 DictationTimeout = this.DictationTimeout,
@@ -334,6 +340,9 @@ namespace VPet.Plugin.VoiceprintRecognition
 
             // 唤醒词匹配阈值
             WakeWordThreshold = Math.Clamp(WakeWordThreshold, 0.1f, 0.95f);
+
+            // 唤醒时声纹验证阈值
+            WakeupVoiceprintThreshold = Math.Clamp(WakeupVoiceprintThreshold, 0.1f, 0.9f);
 
             // Windows 语音识别设置
             WindowsSpeechConfidence = Math.Clamp(WindowsSpeechConfidence, 0.3f, 0.95f);

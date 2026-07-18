@@ -470,6 +470,8 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     WakeupService.StopMonitoring();
                     WakeupService.WakeupDetected -= OnWakeupDetected;
+                    WakeupService.DictationStarted -= OnDictationStarted;
+                    WakeupService.DictationEnded -= OnDictationEnded;
                 }
 
                 // 如果使用 Windows 语音模式，不初始化自定义唤醒服务
@@ -487,9 +489,22 @@ namespace VPet.Plugin.VoiceprintRecognition
                     return;
                 }
 
+                // 至少需要一种 ASR 服务
+                bool hasLocalAsr = SpeechToText != null && SpeechToText.IsInitialized;
+                bool hasExternalAsr = ExternalAsr != null && !string.IsNullOrWhiteSpace(Settings.AsrApiUrl);
+                if (!hasLocalAsr && !hasExternalAsr)
+                {
+                    LogMessage("唤醒服务需要至少一种 ASR 服务（本地 Whisper 模型或外部 ASR API）");
+                    WakeupService = null;
+                    return;
+                }
+
                 WakeupService = new VoiceWakeupService(Settings, Recognizer, AudioCapture,
+                    localAsr: SpeechToText, externalAsr: ExternalAsr,
                     logInfo: LogMessage, logDebug: LogDebug);
                 WakeupService.WakeupDetected += OnWakeupDetected;
+                WakeupService.DictationStarted += OnDictationStarted;
+                WakeupService.DictationEnded += OnDictationEnded;
 
                 // 如果已启用且有注册声纹，自动开始监听
                 if (Settings.EnableWakeup && Recognizer.GetRegisteredVoiceprints().Count > 0)
@@ -517,6 +532,10 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     WindowsSpeech.Stop();
                     WindowsSpeech.WakeupTextReceived -= OnWindowsSpeechTextReceived;
+                    WindowsSpeech.WakeupAudioReady -= OnWakeupAudioReady;
+                    WindowsSpeech.DictationStarted -= OnDictationStarted;
+                    WindowsSpeech.DictationPartialResult -= OnDictationPartialResult;
+                    WindowsSpeech.DictationEnded -= OnDictationEnded;
                     WindowsSpeech.Dispose();
                     WindowsSpeech = null;
                 }
@@ -540,8 +559,13 @@ namespace VPet.Plugin.VoiceprintRecognition
                 }
 
                 WindowsSpeech = new WindowsSpeechService(Settings, Recognizer, AudioCapture,
+                    localAsr: SpeechToText, externalAsr: ExternalAsr,
                     logInfo: LogMessage, logDebug: LogDebug);
                 WindowsSpeech.WakeupTextReceived += OnWindowsSpeechTextReceived;
+                WindowsSpeech.WakeupAudioReady += OnWakeupAudioReady;
+                WindowsSpeech.DictationStarted += OnDictationStarted;
+                WindowsSpeech.DictationPartialResult += OnDictationPartialResult;
+                WindowsSpeech.DictationEnded += OnDictationEnded;
 
                 // 如果已启用唤醒，自动启动
                 if (Settings.EnableWakeup)
@@ -559,32 +583,184 @@ namespace VPet.Plugin.VoiceprintRecognition
         }
 
         /// <summary>
-        /// 唤醒检测回调（自定义模式：Mel DTW + 外部 ASR）
+        /// 当前唤醒弹窗引用
         /// </summary>
-        private async void OnWakeupDetected(byte[] audioData, VoiceprintVerificationResult result)
+        private Window _wakeupPopup;
+
+        /// <summary>
+        /// 弹窗中的流式文字显示控件
+        /// </summary>
+        private TextBlock _wakeupPopupText;
+
+        /// <summary>
+        /// 听写开始回调 - 弹窗提示用户说话
+        /// </summary>
+        private void OnDictationStarted()
         {
             try
             {
-                LogMessage($"唤醒触发 - 用户: {result.MatchedUserId}, 置信度: {result.Confidence:P1}");
-
-                // 使用外部 ASR 转文字
-                if (ExternalAsr == null)
+                LogDebug("OnDictationStarted 回调触发");
+                Application.Current.Dispatcher.Invoke(() =>
                 {
-                    LogMessage("外部 ASR 服务未初始化，无法转文字");
-                    return;
-                }
+                    CloseWakeupPopup();
 
-                LogMessage("调用外部 ASR...");
-                var text = await ExternalAsr.TranscribeAsync(audioData);
+                    _wakeupPopup = CreateWakeupPopup("", isListening: true);
+                    _wakeupPopup.Show();
+                    LogDebug($"唤醒弹窗已显示（聆听中），popupText={_wakeupPopupText != null}");
+                });
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"显示唤醒弹窗失败: {ex.Message}");
+            }
+        }
 
-                if (string.IsNullOrWhiteSpace(text))
+        /// <summary>
+        /// 听写超时/结束回调 - 关闭弹窗
+        /// </summary>
+        private void OnDictationEnded()
+        {
+            try
+            {
+                Application.Current.Dispatcher.Invoke(() =>
                 {
-                    LogMessage("ASR 未返回有效文字");
-                    return;
-                }
+                    CloseWakeupPopup();
+                    LogDebug("唤醒弹窗已关闭（超时）");
+                });
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"关闭唤醒弹窗失败: {ex.Message}");
+            }
+        }
 
-                LogMessage($"ASR 识别结果: {text}");
-                RouteTextToTalkBox(text);
+        /// <summary>
+        /// 听写流式部分结果回调 - 实时更新弹窗文字
+        /// </summary>
+        private void OnDictationPartialResult(string partialText)
+        {
+            try
+            {
+                LogDebug($"流式结果: \"{partialText}\"");
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    if (_wakeupPopupText != null && _wakeupPopup != null)
+                    {
+                        _wakeupPopupText.Text = partialText;
+                        LogDebug($"弹窗文字已更新: \"{partialText}\"");
+                    }
+                    else
+                    {
+                        LogDebug($"弹窗未就绪: popup={_wakeupPopup != null}, text={_wakeupPopupText != null}");
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                LogDebug($"更新流式文字失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 关闭唤醒弹窗
+        /// </summary>
+        private void CloseWakeupPopup()
+        {
+            if (_wakeupPopup != null)
+            {
+                try { _wakeupPopup.Close(); } catch { }
+                _wakeupPopup = null;
+                _wakeupPopupText = null;
+            }
+        }
+
+        /// <summary>
+        /// 创建唤醒弹窗
+        /// </summary>
+        private Window CreateWakeupPopup(string text, bool isListening)
+        {
+            var window = new Window
+            {
+                Title = "语音唤醒",
+                Width = 420,
+                Height = isListening ? 150 : 200,
+                WindowStartupLocation = WindowStartupLocation.CenterScreen,
+                ResizeMode = ResizeMode.NoResize,
+                Topmost = true,
+                ShowInTaskbar = false,
+                Background = System.Windows.Media.Brushes.White
+            };
+
+            var grid = new Grid { Margin = new Thickness(15) };
+
+            if (isListening)
+            {
+                // 聆听状态：显示提示 + 流式文字 + 取消按钮
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+                grid.RowDefinitions.Add(new RowDefinition { Height = new GridLength(1, GridUnitType.Star) });
+                grid.RowDefinitions.Add(new RowDefinition { Height = GridLength.Auto });
+
+                var header = new TextBlock
+                {
+                    Text = "已唤醒，请说话...",
+                    FontSize = 14,
+                    Foreground = System.Windows.Media.Brushes.Gray,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 0, 0, 6)
+                };
+                Grid.SetRow(header, 0);
+                grid.Children.Add(header);
+
+                var label = new TextBlock
+                {
+                    Text = text,
+                    FontSize = 16,
+                    TextWrapping = TextWrapping.Wrap,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                };
+                Grid.SetRow(label, 1);
+                grid.Children.Add(label);
+
+                // 保存引用，供流式更新使用
+                _wakeupPopupText = label;
+
+                var btnCancel = new Button
+                {
+                    Content = "取消",
+                    Width = 80,
+                    Height = 30,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    Margin = new Thickness(0, 8, 0, 0)
+                };
+                btnCancel.Click += (s, e) =>
+                {
+                    LogMessage("唤醒聆听已取消");
+                    window.Close();
+                };
+                Grid.SetRow(btnCancel, 2);
+                grid.Children.Add(btnCancel);
+            }
+
+            window.Content = grid;
+            return window;
+        }
+
+        /// <summary>
+        /// 唤醒检测回调（自定义模式：VAD + 声纹 + ASR 唤醒词检测）
+        /// </summary>
+        private void OnWakeupDetected(string text, VoiceprintVerificationResult result)
+        {
+            try
+            {
+                LogMessage($"唤醒触发 - 用户: {result.MatchedUserId}, 置信度: {result.Confidence:P1}, 文字: {text}");
+
+                Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
+
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    RouteTextToTalkBox(text);
+                }
             }
             catch (Exception ex)
             {
@@ -593,7 +769,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         }
 
         /// <summary>
-        /// Windows 语音识别文字结果回调（已包含听写文字，不需要外部 ASR）
+        /// Windows 语音识别文字结果回调（回退：无外部 ASR 时使用）
         /// </summary>
         private void OnWindowsSpeechTextReceived(string text, VoiceprintVerificationResult result)
         {
@@ -601,13 +777,71 @@ namespace VPet.Plugin.VoiceprintRecognition
             {
                 var userId = result?.MatchedUserId ?? "未知";
                 var confidence = result?.Confidence ?? 0;
-                LogMessage($"Windows 语音唤醒 - 用户: {userId}, 声纹置信度: {confidence:P1}, 文字: {text}");
+                LogMessage($"Windows 语音回退 - 用户: {userId}, 声纹置信度: {confidence:P1}, 文字: {text}");
+
+                Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
+
                 RouteTextToTalkBox(text);
             }
             catch (Exception ex)
             {
                 LogMessage($"Windows 语音结果处理失败: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// 唤醒音频就绪回调 - 发送到外部 ASR 获取高精度转写
+        /// </summary>
+        private async void OnWakeupAudioReady(byte[] audioData, VoiceprintVerificationResult result)
+        {
+            try
+            {
+                var userId = result?.MatchedUserId ?? "未知";
+                LogMessage($"唤醒音频就绪 - 用户: {userId}, 音频: {audioData.Length} 字节");
+
+                // 更新弹窗显示 "正在识别..."
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    if (_wakeupPopupText != null)
+                        _wakeupPopupText.Text = "正在识别...";
+                });
+
+                if (ExternalAsr == null || string.IsNullOrWhiteSpace(Settings.AsrApiUrl))
+                {
+                    LogMessage("外部 ASR 未配置，无法转写");
+                    Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
+                    DictationEndedHandler();
+                    return;
+                }
+
+                LogMessage("调用外部 ASR...");
+                var text = await ExternalAsr.TranscribeAsync(audioData);
+
+                Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
+
+                if (!string.IsNullOrWhiteSpace(text))
+                {
+                    LogMessage($"外部 ASR 结果: {text}");
+                    RouteTextToTalkBox(text);
+                }
+                else
+                {
+                    LogMessage("外部 ASR 未返回有效文字");
+                }
+            }
+            catch (Exception ex)
+            {
+                LogMessage($"外部 ASR 处理失败: {ex.Message}");
+                Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
+            }
+        }
+
+        /// <summary>
+        /// 听写结束辅助（关闭弹窗）
+        /// </summary>
+        private void DictationEndedHandler()
+        {
+            Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
         }
 
         /// <summary>
@@ -645,6 +879,10 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     WindowsSpeech.Stop();
                     WindowsSpeech.WakeupTextReceived -= OnWindowsSpeechTextReceived;
+                    WindowsSpeech.WakeupAudioReady -= OnWakeupAudioReady;
+                    WindowsSpeech.DictationStarted -= OnDictationStarted;
+                    WindowsSpeech.DictationPartialResult -= OnDictationPartialResult;
+                    WindowsSpeech.DictationEnded -= OnDictationEnded;
                     WindowsSpeech.Dispose();
                     WindowsSpeech = null;
                 }
@@ -654,6 +892,8 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     WakeupService.StopMonitoring();
                     WakeupService.WakeupDetected -= OnWakeupDetected;
+                    WakeupService.DictationStarted -= OnDictationStarted;
+                    WakeupService.DictationEnded -= OnDictationEnded;
                     WakeupService = null;
                 }
 

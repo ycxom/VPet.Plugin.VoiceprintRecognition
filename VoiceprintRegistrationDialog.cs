@@ -48,6 +48,10 @@ namespace VPet.Plugin.VoiceprintRecognition
         private DispatcherTimer _recordingTimer;
         private DateTime _recordingStartTime;
 
+        // 服务暂停状态（录音前暂停，录音后恢复）
+        private bool _wasWakeupMonitoring = false;
+        private bool _wasWindowsSpeechListening = false;
+
         // 进度追踪
         private int _currentPhase = 0;        // 当前阶段 (增强模式下 0~3)
         private int _currentSampleInPhase = 0; // 当前阶段内的录音序号 (0~2)
@@ -90,7 +94,7 @@ namespace VPet.Plugin.VoiceprintRecognition
             _tbWakeWord = new TextBox
             {
                 Margin = new Thickness(0, 0, 0, 4),
-                Text = "你好小宠",
+                Text = "你好萝莉斯",
                 FontSize = 16
             };
             mainPanel.Children.Add(_tbWakeWord);
@@ -317,6 +321,12 @@ namespace VPet.Plugin.VoiceprintRecognition
         {
             try
             {
+                // 首次录音时暂停唤醒服务（释放麦克风）
+                if (_audioSamples.Count == 0)
+                {
+                    PauseWakeupServices();
+                }
+
                 _plugin.AudioCapture?.StartCapture();
                 _isRecording = true;
                 _recordingStartTime = DateTime.Now;
@@ -554,6 +564,72 @@ namespace VPet.Plugin.VoiceprintRecognition
             {
                 _isRecording = false;
                 try { _plugin.AudioCapture?.StopCapture(); } catch { }
+            }
+
+            // 恢复唤醒服务
+            ResumeWakeupServices();
+        }
+
+        /// <summary>
+        /// 暂停唤醒服务（释放麦克风给录音使用）
+        /// </summary>
+        private void PauseWakeupServices()
+        {
+            try
+            {
+                if (_plugin.WindowsSpeech != null && _plugin.WindowsSpeech.IsListening)
+                {
+                    _wasWindowsSpeechListening = true;
+                    _plugin.WindowsSpeech.Stop();
+                    _plugin.LogDebug("注册: 已暂停 Windows 语音服务");
+                }
+
+                if (_plugin.WakeupService != null && _plugin.WakeupService.IsMonitoring)
+                {
+                    _wasWakeupMonitoring = true;
+                    _plugin.WakeupService.StopMonitoring();
+                    _plugin.LogDebug("注册: 已暂停唤醒监听");
+                }
+
+                // 确保 AudioCapture 完全停止
+                if (_plugin.AudioCapture?.IsMonitoring == true)
+                {
+                    _plugin.AudioCapture.StopMonitoring();
+                }
+
+                // 等待设备释放
+                System.Threading.Thread.Sleep(200);
+            }
+            catch (Exception ex)
+            {
+                _plugin.LogMessage($"注册: 暂停服务失败 - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 恢复之前暂停的唤醒服务
+        /// </summary>
+        private void ResumeWakeupServices()
+        {
+            try
+            {
+                if (_wasWindowsSpeechListening && _plugin.WindowsSpeech != null)
+                {
+                    _plugin.WindowsSpeech.Start();
+                    _plugin.LogDebug("注册: 已恢复 Windows 语音服务");
+                    _wasWindowsSpeechListening = false;
+                }
+
+                if (_wasWakeupMonitoring && _plugin.WakeupService != null)
+                {
+                    _plugin.WakeupService.StartMonitoring();
+                    _plugin.LogDebug("注册: 已恢复唤醒监听");
+                    _wasWakeupMonitoring = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _plugin.LogMessage($"注册: 恢复服务失败 - {ex.Message}");
             }
         }
     }

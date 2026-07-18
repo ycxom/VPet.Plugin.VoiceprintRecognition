@@ -47,9 +47,9 @@ namespace VPet.Plugin.VoiceprintRecognition
         private const int FRAME_SIZE = 400;       // 25ms at 16kHz
         private const int HOP_SIZE = 160;         // 10ms
         private const int FFT_SIZE = 512;         // 下一个 2 的幂次
-        private const int N_MELS = 20;            // Mel 频带数
+        private const int N_MELS = 40;            // Mel 频带数（40 比 20 分辨率更高）
         private const int DETECT_SAMPLE_RATE = 16000;
-        private const float SILENCE_ENERGY_THRESHOLD = 0.005f;
+        private const float SILENCE_ENERGY_THRESHOLD = 0.002f;
 
         // 静态 Mel 滤波器（线程安全懒初始化）
         private static float[,] _melFilters;
@@ -138,7 +138,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                 }
             }
 
-            // CMVN: 减去每个频带的均值（消除音量/距离差异）
+            // CMVN: 均值方差归一化（消除音量/距离/环境差异）
             for (int m = 0; m < N_MELS; m++)
             {
                 float mean = 0;
@@ -146,8 +146,17 @@ namespace VPet.Plugin.VoiceprintRecognition
                     mean += features[f * N_MELS + m];
                 mean /= numFrames;
 
+                float variance = 0;
                 for (int f = 0; f < numFrames; f++)
-                    features[f * N_MELS + m] -= mean;
+                {
+                    float diff = features[f * N_MELS + m] - mean;
+                    variance += diff * diff;
+                }
+                variance /= numFrames;
+                float stddev = (float)Math.Sqrt(variance + 1e-6f);
+
+                for (int f = 0; f < numFrames; f++)
+                    features[f * N_MELS + m] = (features[f * N_MELS + m] - mean) / stddev;
             }
 
             // 裁剪前后静音帧
@@ -198,14 +207,17 @@ namespace VPet.Plugin.VoiceprintRecognition
                 if (reference.Features == null || reference.NumFrames < 3)
                     continue;
 
-                // 确保维度一致
-                int bands = Math.Min(input.NumBands, reference.NumBands);
-                if (bands <= 0) continue;
+                // 维度必须一致，不同维度的模板无法正确匹配
+                if (reference.NumBands != input.NumBands)
+                {
+                    _logDebug($"唤醒词模板维度不匹配: 输入={input.NumBands}, 参考={reference.NumBands} (条件={reference.Condition}), 请重新注册");
+                    continue;
+                }
 
                 float similarity = ComputeDtwSimilarity(
                     input.Features, input.NumFrames,
                     reference.Features, reference.NumFrames,
-                    bands);
+                    input.NumBands);
 
                 if (similarity > bestSimilarity)
                 {
@@ -219,45 +231,56 @@ namespace VPet.Plugin.VoiceprintRecognition
         }
 
         /// <summary>
-        /// 使用 DTW 计算两个 Mel 频谱序列的相似度 (0~1)
-        /// 代价函数为帧间欧氏距离
+        /// 使用子序列 DTW 计算相似度 (0~1)
+        /// 在较长序列中搜索与较短序列最佳匹配的片段
+        /// 适用于唤醒词嵌入在较长语音段中的场景
         /// </summary>
         public static float ComputeDtwSimilarity(float[] featA, int framesA, float[] featB, int framesB, int numBands)
         {
-            int m = framesA;
-            int n = framesB;
+            // 确定 haystack (长序列) 和 needle (短序列/模板)
+            float[] hayFeat, ndlFeat;
+            int hayLen, ndlLen;
 
-            // 长度差异过大 (>3 倍) 直接拒绝
-            if (m > n * 3 || n > m * 3)
+            if (framesA >= framesB)
+            {
+                hayFeat = featA; hayLen = framesA;
+                ndlFeat = featB; ndlLen = framesB;
+            }
+            else
+            {
+                hayFeat = featB; hayLen = framesB;
+                ndlFeat = featA; ndlLen = framesA;
+            }
+
+            // 长度差异过大 (>8 倍) 直接拒绝
+            if (hayLen > ndlLen * 8)
                 return 0;
 
-            // Sakoe-Chiba 带约束
-            int window = Math.Max(m, n) / 3;
-            window = Math.Max(window, Math.Abs(m - n) + 1);
+            // 滚动数组子序列 DTW
+            // 外循环遍历 haystack，内循环遍历 needle
+            var prev = new float[ndlLen + 1];
+            var curr = new float[ndlLen + 1];
 
-            // 滚动数组 DTW
-            var prev = new float[n + 1];
-            var curr = new float[n + 1];
-
-            for (int j = 0; j <= n; j++) prev[j] = float.MaxValue;
+            for (int j = 0; j <= ndlLen; j++) prev[j] = float.MaxValue;
             prev[0] = 0;
 
-            for (int i = 1; i <= m; i++)
+            float minCost = float.MaxValue;
+
+            for (int i = 1; i <= hayLen; i++)
             {
-                for (int j = 0; j <= n; j++) curr[j] = float.MaxValue;
+                // 子序列 DTW 核心：允许从 haystack 任意位置开始匹配
+                curr[0] = 0;
+                for (int j = 1; j <= ndlLen; j++) curr[j] = float.MaxValue;
 
-                for (int j = 1; j <= n; j++)
+                for (int j = 1; j <= ndlLen; j++)
                 {
-                    if (Math.Abs(i - j) > window)
-                        continue;
-
                     // 帧间欧氏距离
                     float dist = 0;
-                    int offA = (i - 1) * numBands;
-                    int offB = (j - 1) * numBands;
+                    int offH = (i - 1) * numBands;
+                    int offN = (j - 1) * numBands;
                     for (int d = 0; d < numBands; d++)
                     {
-                        float diff = featA[offA + d] - featB[offB + d];
+                        float diff = hayFeat[offH + d] - ndlFeat[offN + d];
                         dist += diff * diff;
                     }
                     dist = (float)Math.Sqrt(dist);
@@ -272,20 +295,24 @@ namespace VPet.Plugin.VoiceprintRecognition
                     curr[j] = dist + minPrev;
                 }
 
+                // 跟踪 needle 完全匹配时的最小代价
+                if (curr[ndlLen] < minCost)
+                    minCost = curr[ndlLen];
+
                 var temp = prev;
                 prev = curr;
                 curr = temp;
             }
 
-            float totalCost = prev[n];
-            if (totalCost == float.MaxValue)
+            if (minCost == float.MaxValue)
                 return 0;
 
-            // 归一化: 路径长度 × sqrt(维度)
-            float normalizedCost = totalCost / ((m + n) * (float)Math.Sqrt(numBands));
+            // 归一化: needle 长度 × sqrt(维度)
+            // 子序列 DTW 的路径长度约为 2×ndlLen
+            float normalizedCost = minCost / (2.0f * ndlLen * (float)Math.Sqrt(numBands));
 
-            // 转换为相似度
-            float similarity = 1.0f / (1.0f + normalizedCost);
+            // 指数衰减相似度
+            float similarity = (float)Math.Exp(-normalizedCost * 2.0f);
 
             return Math.Max(0, similarity);
         }

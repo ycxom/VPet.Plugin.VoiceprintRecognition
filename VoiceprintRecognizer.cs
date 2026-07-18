@@ -386,15 +386,17 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// <summary>
         /// 验证声纹
         /// </summary>
-        public async Task<VoiceprintVerificationResult> VerifyAsync(byte[] audioData)
+        public async Task<VoiceprintVerificationResult> VerifyAsync(byte[] audioData, float? thresholdOverride = null)
         {
-            return await Task.Run(() => Verify(audioData));
+            return await Task.Run(() => Verify(audioData, thresholdOverride));
         }
 
         /// <summary>
         /// 验证声纹（同步版本）
         /// </summary>
-        public VoiceprintVerificationResult Verify(byte[] audioData)
+        /// <param name="audioData">音频数据</param>
+        /// <param name="thresholdOverride">可选阈值覆盖（余弦相似度），为 null 时使用 VoiceprintThreshold</param>
+        public VoiceprintVerificationResult Verify(byte[] audioData, float? thresholdOverride = null)
         {
             try
             {
@@ -427,7 +429,8 @@ namespace VPet.Plugin.VoiceprintRecognition
                 }
 
                 // 判断是否通过阈值
-                bool isVerified = maxSimilarity >= _settings.VoiceprintThreshold;
+                float threshold = thresholdOverride ?? _settings.VoiceprintThreshold;
+                bool isVerified = maxSimilarity >= threshold;
 
                 return new VoiceprintVerificationResult
                 {
