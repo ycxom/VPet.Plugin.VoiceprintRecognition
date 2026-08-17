@@ -205,10 +205,39 @@
                             <StackPanel Margin="10">
                                 <RadioButton x:Name="RadioCustomMode" Content="自定义模式 (Mel 频谱匹配 + 外部 ASR)" Margin="0,5" GroupName="WakeMode"
                                            Checked="RadioWakeMode_Changed"/>
-                                <TextBlock Text="&#x2139;&#xFE0F; 使用 Mel 频谱 DTW 匹配唤醒词 + 外部 ASR API 转文字" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 自定义：声纹 + Mel/DTW 唤醒词（无包络时回退 ASR）+ Whisper/外部 ASR 转指令" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
                                 <RadioButton x:Name="RadioWindowsSpeech" Content="Windows 语音识别模式 (模仿 Cortana)" Margin="0,10,0,5" GroupName="WakeMode"
                                            Checked="RadioWakeMode_Changed"/>
                                 <TextBlock Text="&#x2139;&#xFE0F; 使用 Windows 自带语音识别引擎，唤醒词为声纹注册时的用户名" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                                <RadioButton x:Name="RadioOpenWakeWord" Content="openWakeWord ONNX（自训中文唤醒词，推荐）" Margin="0,10,0,5" GroupName="WakeMode"
+                                           Checked="RadioWakeMode_Changed"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 使用 models/openwakeword 下 ONNX：共享特征 + 自训分类头（如 nihao_luolisi.onnx）。资源占用很低。" Foreground="#666666" FontSize="12" Margin="20,0,0,5" TextWrapping="Wrap"/>
+                                <StackPanel Orientation="Horizontal" Margin="20,5,0,5" x:Name="PanelOpenWakeWord">
+                                    <TextBlock Text="OWW 阈值:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderOpenWakeWord" Width="180" Minimum="0.1" Maximum="0.9" Value="0.5" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderOpenWakeWord_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderOpenWakeWord, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="20,5,0,5">
+                                    <TextBlock Text="一级软阈值:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderOpenWakeWordSoft" Width="180" Minimum="0.1" Maximum="0.85" Value="0.35" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderOpenWakeWordSoft_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderOpenWakeWordSoft, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="20,5,0,5">
+                                    <TextBlock Text="确认帧数:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderOpenWakeWordPatience" Width="180" Minimum="1" Maximum="6" Value="2" TickFrequency="1" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderOpenWakeWordPatience_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderOpenWakeWordPatience, Path=Value, StringFormat={}{0:F0}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <CheckBox x:Name="CheckAssistantPipeline" Content="助手式流水线（两级KWS→声纹→指令VAD→ASR）" Margin="20,5,0,5"
+                                          Checked="CheckAssistantPipeline_Changed" Unchecked="CheckAssistantPipeline_Changed"/>
+
+                                <StackPanel Orientation="Horizontal" Margin="20,0,0,5">
+                                    <TextBlock Text="分类头文件:" VerticalAlignment="Center" Width="100"/>
+                                    <TextBox x:Name="TextOpenWakeWordFile" Width="220" TextChanged="TextOpenWakeWordFile_TextChanged"/>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 留空则加载 openwakeword 目录下全部分类头。训练说明见 docs/openwakeword-train.md" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
                             </StackPanel>
                         </GroupBox>
 
@@ -221,7 +250,14 @@
                                           ValueChanged="SliderWakeWordThreshold_ValueChanged"/>
                                     <TextBlock Text="{Binding ElementName=SliderWakeWordThreshold, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
                                 </StackPanel>
-                                <TextBlock Text="&#x2139;&#xFE0F; 唤醒词 Mel 频谱匹配阈值，值越高要求越严格（建议 0.45~0.65）" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                                <TextBlock Text="&#x2139;&#xFE0F; 自定义模式：Mel+DTW 唤醒词阈值，越高越严（建议 0.45~0.65）" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
+                                <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
+                                    <TextBlock Text="唤醒声纹阈值:" VerticalAlignment="Center" Width="100"/>
+                                    <Slider x:Name="SliderWakeupVoiceprint" Width="180" Minimum="0.15" Maximum="0.85" Value="0.40" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                          ValueChanged="SliderWakeupVoiceprint_ValueChanged"/>
+                                    <TextBlock Text="{Binding ElementName=SliderWakeupVoiceprint, Path=Value, StringFormat={}{0:F2}}" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                </StackPanel>
+                                <TextBlock Text="&#x2139;&#xFE0F; 唤醒声纹余弦阈值（日志看「余弦=」）。过严会出现关键词已识别但声纹反复失败（建议 0.30~0.50）" Foreground="#666666" FontSize="12" Margin="20,0,0,10" TextWrapping="Wrap"/>
                             </StackPanel>
                         </GroupBox>
 

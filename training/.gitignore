@@ -1,0 +1,12 @@
+.venv/
+.train-venv/
+.openwakeword-src/
+.env
+data/positive/
+data/negative/
+data/meta/*.jsonl
+data/windows_tts*/
+output/
+__pycache__/
+*.pyc
+.DS_Store

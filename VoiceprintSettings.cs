@@ -146,12 +146,52 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// <summary>
         /// 唤醒时声纹验证阈值（余弦相似度，比主阈值更低，因为关键词语法已提供第一层验证）
         /// </summary>
-        public float WakeupVoiceprintThreshold { get; set; } = 0.45f;
+        public float WakeupVoiceprintThreshold { get; set; } = 0.40f;
 
         /// <summary>
         /// 是否使用 Windows 语音识别模式（否则使用自定义 Mel DTW + 外部 ASR）
         /// </summary>
         public bool UseWindowsSpeech { get; set; } = false;
+
+        /// <summary>
+        /// 使用 openWakeWord ONNX 流式唤醒（优先于自定义 Mel/DTW；与 Windows 模式互斥）
+        /// </summary>
+        public bool UseOpenWakeWord { get; set; } = false;
+
+        /// <summary>
+        /// openWakeWord 模型目录（相对 ModelsPath 或绝对路径），内含 melspectrogram/embedding/分类头
+        /// </summary>
+        public string OpenWakeWordModelDir { get; set; } = "openwakeword";
+
+        /// <summary>
+        /// 指定分类头文件名（可空=加载目录内全部非共享 onnx）；如 nihao_luolisi.onnx
+        /// </summary>
+        public string OpenWakeWordModelFile { get; set; } = "";
+
+        /// <summary>
+        /// openWakeWord 唤醒阈值 (0~1)，官方默认约 0.5
+        /// </summary>
+        public float OpenWakeWordThreshold { get; set; } = 0.5f;
+
+        /// <summary>
+        /// 一级粗检阈值（低于确认阈值）。连续超过软阈值才进入二级确认，模拟手机助手两级唤醒。
+        /// </summary>
+        public float OpenWakeWordSoftThreshold { get; set; } = 0.35f;
+
+        /// <summary>
+        /// 一级命中后需连续满足确认阈值的帧数（每帧约 80ms）
+        /// </summary>
+        public int OpenWakeWordPatienceFrames { get; set; } = 2;
+
+        /// <summary>
+        /// 助手式流水线：KWS -> 声纹 -> 指令VAD -> ASR（推荐开启）
+        /// </summary>
+        public bool UseAssistantPipeline { get; set; } = true;
+
+        /// <summary>
+        /// 唤醒后指令预录时长（秒），避免截断句首
+        /// </summary>
+        public float CommandPrerollSeconds { get; set; } = 0.35f;
 
         /// <summary>
         /// Windows 语音识别关键词最低置信度 (0~1)
@@ -299,6 +339,14 @@ namespace VPet.Plugin.VoiceprintRecognition
                 WakeWordThreshold = this.WakeWordThreshold,
                 WakeupVoiceprintThreshold = this.WakeupVoiceprintThreshold,
                 UseWindowsSpeech = this.UseWindowsSpeech,
+                UseOpenWakeWord = this.UseOpenWakeWord,
+                OpenWakeWordModelDir = this.OpenWakeWordModelDir,
+                OpenWakeWordModelFile = this.OpenWakeWordModelFile,
+                OpenWakeWordThreshold = this.OpenWakeWordThreshold,
+                OpenWakeWordSoftThreshold = this.OpenWakeWordSoftThreshold,
+                OpenWakeWordPatienceFrames = this.OpenWakeWordPatienceFrames,
+                UseAssistantPipeline = this.UseAssistantPipeline,
+                CommandPrerollSeconds = this.CommandPrerollSeconds,
                 WindowsSpeechConfidence = this.WindowsSpeechConfidence,
                 DictationTimeout = this.DictationTimeout,
                 WindowsSpeechCulture = this.WindowsSpeechCulture,
@@ -346,6 +394,11 @@ namespace VPet.Plugin.VoiceprintRecognition
 
             // Windows 语音识别设置
             WindowsSpeechConfidence = Math.Clamp(WindowsSpeechConfidence, 0.3f, 0.95f);
+            OpenWakeWordThreshold = Math.Clamp(OpenWakeWordThreshold, 0.05f, 0.95f);
+            OpenWakeWordSoftThreshold = Math.Clamp(OpenWakeWordSoftThreshold, 0.05f, OpenWakeWordThreshold);
+            OpenWakeWordPatienceFrames = Math.Clamp(OpenWakeWordPatienceFrames, 1, 8);
+            CommandPrerollSeconds = Math.Clamp(CommandPrerollSeconds, 0f, 1.5f);
+            if (UseOpenWakeWord) UseWindowsSpeech = false;
             DictationTimeout = Math.Clamp(DictationTimeout, 3.0f, 30.0f);
             var validCultures = new[] { "zh-CN", "en-US", "ja-JP" };
             if (!validCultures.Contains(WindowsSpeechCulture))

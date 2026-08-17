@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -8,16 +9,19 @@ using System.Threading.Tasks;
 namespace VPet.Plugin.VoiceprintRecognition
 {
     /// <summary>
-    /// 声纹唤醒服务
-    /// 持续监听音频流，通过 VAD 检测语音片段，
-    /// 并行验证声纹 + ASR 转写检测唤醒词，通过后触发唤醒事件
+    /// Assistant-style wake service (mobile AI pipeline):
+    /// always-on light KWS -> voiceprint gate -> command VAD -> on-demand ASR
     /// </summary>
     public class VoiceWakeupService
     {
         private enum WakeupState
         {
-            Monitoring,       // 监听中，等待唤醒词
-            AwaitingCommand   // 唤醒词已检测，等待指令
+            Monitoring,
+            PrimaryCandidate,
+            VerifyingSpeaker,
+            AwaitingCommand,
+            Transcribing,
+            Cooldown
         }
 
         private readonly VoiceprintSettings _settings;
@@ -27,50 +31,38 @@ namespace VPet.Plugin.VoiceprintRecognition
         private readonly ExternalAsrService _externalAsr;
         private readonly Action<string> _logInfo;
         private readonly Action<string> _logDebug;
+        private readonly string _modelsPath;
+        private readonly WakeWordDetector _wakeWordDetector;
 
-        // 状态机
         private WakeupState _state = WakeupState.Monitoring;
         private VoiceprintVerificationResult _pendingResult;
         private Timer _commandTimer;
 
-        // VAD 状态
-        private bool _isSpeaking = false;
+        private bool _isSpeaking;
         private readonly List<byte> _speechBuffer = new List<byte>();
-        private int _silenceChunks = 0;
-        private int _speechChunks = 0;
+        private int _silenceChunks;
+        private int _speechChunks;
         private readonly Stopwatch _recordingStopwatch = new Stopwatch();
 
-        // 冷却计时
         private DateTime _lastWakeupTime = DateTime.MinValue;
+        private bool _isMonitoring;
+        private volatile bool _isProcessing;
 
-        // 监听状态
-        private bool _isMonitoring = false;
-
-        // 防止并发处理
-        private volatile bool _isProcessing = false;
-
-        // 唤醒词列表（从已注册声纹的 UserName 提取）
         private List<string> _wakeWords = new List<string>();
 
-        /// <summary>
-        /// 是否正在监听
-        /// </summary>
+        private OpenWakeWordEngine _oww;
+        private int _owwSoftHits;
+        private int _owwHardHits;
+        private string _owwCandidateName;
+        private float _owwCandidateScore;
+        private readonly List<byte> _commandPreroll = new List<byte>();
+
         public bool IsMonitoring => _isMonitoring;
 
-        /// <summary>
-        /// 唤醒检测事件（文字结果 + 声纹验证结果）
-        /// </summary>
         public event Action<string, VoiceprintVerificationResult> WakeupDetected;
-
-        /// <summary>
-        /// 进入等待指令模式事件
-        /// </summary>
         public event Action DictationStarted;
-
-        /// <summary>
-        /// 指令超时/取消事件
-        /// </summary>
         public event Action DictationEnded;
+        public event Action<string> StatusChanged;
 
         public VoiceWakeupService(
             VoiceprintSettings settings,
@@ -79,65 +71,69 @@ namespace VPet.Plugin.VoiceprintRecognition
             SpeechToTextService localAsr = null,
             ExternalAsrService externalAsr = null,
             Action<string> logInfo = null,
-            Action<string> logDebug = null)
+            Action<string> logDebug = null,
+            string modelsPath = null)
         {
             _settings = settings;
             _recognizer = recognizer;
             _audioCapture = audioCapture;
             _localAsr = localAsr;
             _externalAsr = externalAsr;
-            _logInfo = logInfo ?? (s => Console.WriteLine($"[唤醒] {s}"));
-            _logDebug = logDebug ?? (s => Console.WriteLine($"[唤醒][DEBUG] {s}"));
+            _logInfo = logInfo ?? (s => Console.WriteLine("[wake] " + s));
+            _logDebug = logDebug ?? (s => Console.WriteLine("[wake][DEBUG] " + s));
+            _modelsPath = modelsPath ?? "";
+            _wakeWordDetector = new WakeWordDetector(_logDebug);
         }
 
-        /// <summary>
-        /// 开始监听
-        /// </summary>
         public void StartMonitoring()
         {
             if (_isMonitoring) return;
 
             if (_recognizer == null)
             {
-                _logInfo("无法启动监听：声纹识别引擎未初始化");
+                _logInfo("cannot start: recognizer null");
                 return;
             }
-
             if (_audioCapture == null)
             {
-                _logInfo("无法启动监听：音频采集器未初始化");
+                _logInfo("cannot start: audio capture null");
                 return;
             }
 
-            // 检查是否有可用的 ASR 服务（本地 Whisper 或外部 API）
             bool hasLocalAsr = _localAsr != null && _localAsr.IsInitialized;
             bool hasExternalAsr = _externalAsr != null && !string.IsNullOrWhiteSpace(_settings.AsrApiUrl);
             if (!hasLocalAsr && !hasExternalAsr)
             {
-                _logInfo("无法启动监听：没有可用的 ASR 服务（需要本地 Whisper 模型或外部 ASR API）");
+                _logInfo("cannot start: need Whisper or external ASR for commands");
                 return;
             }
-            _logInfo($"ASR 服务: {(hasLocalAsr ? "本地 Whisper" : "")}{(hasLocalAsr && hasExternalAsr ? " + " : "")}{(hasExternalAsr ? "外部 API" : "")}");
 
-            // 刷新唤醒词列表
             RefreshWakeWords();
-            if (_wakeWords.Count == 0)
+            EnsureOpenWakeWord();
+
+            // OWW mode can start without registered names; custom mode needs wake words
+            if (!_settings.UseOpenWakeWord || _oww == null || !_oww.IsInitialized)
             {
-                _logInfo("无法启动监听：没有已注册的声纹（唤醒词为空）");
-                return;
+                if (_wakeWords.Count == 0)
+                {
+                    _logInfo("cannot start: no registered wake words (register voiceprint first)");
+                    return;
+                }
             }
 
             ResetVadState();
+            ResetKwsCandidate();
             _state = WakeupState.Monitoring;
             _audioCapture.AudioDataAvailable += OnAudioDataAvailable;
             _audioCapture.StartMonitoring();
             _isMonitoring = true;
-            _logInfo($"唤醒监听已启动，唤醒词: {string.Join(", ", _wakeWords)}");
+            EmitStatus("监听中");
+            string mode = (_oww != null && _oww.IsInitialized && _settings.UseOpenWakeWord)
+                ? "openWakeWord+voiceprint+ASR"
+                : "VAD+DTW/ASR+voiceprint";
+            _logInfo($"wake monitoring started [{mode}], words: {string.Join(", ", _wakeWords)}");
         }
 
-        /// <summary>
-        /// 停止监听
-        /// </summary>
         public void StopMonitoring()
         {
             if (!_isMonitoring) return;
@@ -150,16 +146,16 @@ namespace VPet.Plugin.VoiceprintRecognition
             _pendingResult = null;
             _state = WakeupState.Monitoring;
             ResetVadState();
-            _logInfo("唤醒监听已停止");
+            ResetKwsCandidate();
+            _oww?.Reset();
+            EmitStatus("已停止");
+            _logInfo("wake monitoring stopped");
         }
 
-        /// <summary>
-        /// 更新唤醒词列表
-        /// </summary>
         public void UpdateKeywords()
         {
             RefreshWakeWords();
-            _logInfo($"唤醒词已更新: {string.Join(", ", _wakeWords)}");
+            _logInfo("wake words updated: " + string.Join(", ", _wakeWords));
         }
 
         private void RefreshWakeWords()
@@ -180,13 +176,37 @@ namespace VPet.Plugin.VoiceprintRecognition
             _recordingStopwatch.Reset();
         }
 
-        /// <summary>
-        /// 处理每个音频块（约 100ms）— 仅做轻量 VAD，不阻塞音频线程
-        /// </summary>
+        private void EmitStatus(string status)
+        {
+            try { StatusChanged?.Invoke(status); } catch { }
+        }
+
+        private void ResetKwsCandidate()
+        {
+            _owwSoftHits = 0;
+            _owwHardHits = 0;
+            _owwCandidateName = null;
+            _owwCandidateScore = 0;
+            _commandPreroll.Clear();
+        }
+
         private void OnAudioDataAvailable(object sender, byte[] audioChunk)
         {
             try
             {
+                // Stage0/1: always-on KWS when OWW enabled
+                if (_settings.UseOpenWakeWord && _oww != null && _oww.IsInitialized
+                    && (_state == WakeupState.Monitoring || _state == WakeupState.PrimaryCandidate))
+                {
+                    ProcessOpenWakeWordFrame(audioChunk);
+                    return;
+                }
+
+                // Command listening uses VAD in AwaitingCommand
+                // Custom (non-OWW) wake also uses VAD in Monitoring
+                if (_state != WakeupState.Monitoring && _state != WakeupState.AwaitingCommand)
+                    return;
+
                 float rms = ComputeRms(audioChunk);
                 bool isVoice = rms > _settings.SilenceThreshold;
 
@@ -200,23 +220,20 @@ namespace VPet.Plugin.VoiceprintRecognition
                         _silenceChunks = 0;
                         _speechChunks = 1;
                         _recordingStopwatch.Restart();
-                        _logDebug($"VAD: 语音开始 (RMS={rms:F4})");
+                        _logDebug($"VAD speech start RMS={rms:F4}");
                     }
                 }
                 else
                 {
                     _speechBuffer.AddRange(audioChunk);
                     _speechChunks++;
-
-                    if (isVoice)
-                        _silenceChunks = 0;
-                    else
-                        _silenceChunks++;
+                    if (isVoice) _silenceChunks = 0;
+                    else _silenceChunks++;
 
                     float elapsed = (float)_recordingStopwatch.Elapsed.TotalSeconds;
                     if (elapsed >= _settings.MaxRecordingDuration)
                     {
-                        _logDebug($"VAD: 达到最长时长 ({elapsed:F1}s)，强制结束");
+                        _logDebug("VAD max duration");
                         DispatchSpeechEnd();
                         return;
                     }
@@ -224,75 +241,57 @@ namespace VPet.Plugin.VoiceprintRecognition
                     float silenceDuration = _silenceChunks * 0.1f;
                     if (silenceDuration >= _settings.SilenceTimeout)
                     {
-                        _logDebug($"VAD: 静音超时 ({silenceDuration:F1}s)，语音结束");
+                        _logDebug($"VAD silence end {silenceDuration:F1}s");
                         DispatchSpeechEnd();
                     }
                 }
             }
             catch (Exception ex)
             {
-                _logInfo($"处理音频块异常: {ex.Message}");
+                _logInfo("audio chunk error: " + ex.Message);
             }
         }
 
-        /// <summary>
-        /// 提取音频数据后投到后台线程处理，不阻塞音频回调
-        /// </summary>
         private void DispatchSpeechEnd()
         {
             _isSpeaking = false;
             _recordingStopwatch.Stop();
-
             var audioData = _speechBuffer.ToArray();
             _speechBuffer.Clear();
             _silenceChunks = 0;
             _speechChunks = 0;
-
-            // 投到后台线程，立即释放音频回调线程
             Task.Run(() => ProcessSpeechAsync(audioData));
         }
 
-        /// <summary>
-        /// 后台处理语音片段：根据当前状态执行不同逻辑
-        /// </summary>
         private async Task ProcessSpeechAsync(byte[] audioData)
         {
-            // 防止并发处理
             if (_isProcessing)
             {
-                _logDebug("上一段语音仍在处理中，丢弃本段");
+                _logDebug("busy, drop segment");
                 return;
             }
             _isProcessing = true;
-
             var sw = Stopwatch.StartNew();
-
             try
             {
                 int bytesPerSecond = _settings.SampleRate * _settings.Channels * (_settings.BitsPerSample / 8);
                 float duration = audioData.Length / (float)bytesPerSecond;
-
-                // 最短时长检查
                 if (duration < _settings.MinRecordingDuration)
                 {
-                    _logDebug($"VAD: 片段太短 ({duration:F1}s < {_settings.MinRecordingDuration}s)，丢弃");
+                    _logDebug($"segment too short {duration:F1}s");
                     return;
                 }
 
-                _logInfo($"检测到语音片段: {duration:F1}s, {audioData.Length} bytes (状态={_state})");
+                _logInfo($"speech segment {duration:F1}s state={_state}");
 
                 if (_state == WakeupState.Monitoring)
-                {
                     await ProcessMonitoringPhase(audioData, sw);
-                }
                 else if (_state == WakeupState.AwaitingCommand)
-                {
                     await ProcessCommandPhase(audioData, sw);
-                }
             }
             catch (Exception ex)
             {
-                _logInfo($"唤醒检测失败: {ex.Message}");
+                _logInfo("process speech failed: " + ex.Message);
             }
             finally
             {
@@ -300,167 +299,358 @@ namespace VPet.Plugin.VoiceprintRecognition
             }
         }
 
-        /// <summary>
-        /// 监听阶段：并行声纹验证 + ASR 转写，检测唤醒词
-        /// </summary>
+        private void ProcessOpenWakeWordFrame(byte[] audioChunk)
+        {
+            if (_isProcessing) return;
+            if ((DateTime.Now - _lastWakeupTime).TotalSeconds < _settings.WakeupCooldown)
+                return;
+
+            if (audioChunk != null && audioChunk.Length > 0)
+            {
+                _commandPreroll.AddRange(audioChunk);
+                int maxPreroll = (int)(_settings.SampleRate * 2 * Math.Max(0.2f, _settings.CommandPrerollSeconds + 0.5f));
+                if (_commandPreroll.Count > maxPreroll)
+                    _commandPreroll.RemoveRange(0, _commandPreroll.Count - maxPreroll);
+            }
+
+            float hard = _settings.OpenWakeWordThreshold;
+            float soft = _settings.UseAssistantPipeline
+                ? Math.Min(_settings.OpenWakeWordSoftThreshold, hard)
+                : hard;
+            int patience = _settings.UseAssistantPipeline ? Math.Max(1, _settings.OpenWakeWordPatienceFrames) : 1;
+
+            bool any = _oww.TryDetect(audioChunk, soft, out var modelName, out var score);
+            if (!any)
+            {
+                if (_state == WakeupState.PrimaryCandidate)
+                {
+                    _owwSoftHits = Math.Max(0, _owwSoftHits - 1);
+                    _owwHardHits = 0;
+                    if (_owwSoftHits == 0)
+                    {
+                        _state = WakeupState.Monitoring;
+                        _owwCandidateName = null;
+                        EmitStatus("监听中");
+                    }
+                }
+                return;
+            }
+
+            _logDebug($"KWS {modelName} score={score:F3} soft={soft:F2} hard={hard:F2}");
+
+            if (_state == WakeupState.Monitoring)
+            {
+                _state = WakeupState.PrimaryCandidate;
+                _owwSoftHits = 1;
+                _owwHardHits = score >= hard ? 1 : 0;
+                _owwCandidateName = modelName;
+                _owwCandidateScore = score;
+                EmitStatus("检测到唤醒…");
+                _logInfo($"KWS stage1 candidate: {modelName} {score:F3}");
+            }
+            else if (_state == WakeupState.PrimaryCandidate)
+            {
+                if (!string.Equals(modelName, _owwCandidateName, StringComparison.OrdinalIgnoreCase))
+                {
+                    _owwCandidateName = modelName;
+                    _owwSoftHits = 1;
+                    _owwHardHits = score >= hard ? 1 : 0;
+                    _owwCandidateScore = score;
+                }
+                else
+                {
+                    _owwSoftHits++;
+                    if (score >= hard) _owwHardHits++;
+                    if (score > _owwCandidateScore) _owwCandidateScore = score;
+                }
+            }
+
+            if (_owwHardHits >= patience || (!_settings.UseAssistantPipeline && score >= hard))
+            {
+                _ = Task.Run(() => ConfirmWakeAndListenAsync(_owwCandidateName, _owwCandidateScore));
+            }
+        }
+
+        private async Task ConfirmWakeAndListenAsync(string modelName, float score)
+        {
+            if (_isProcessing) return;
+            if (_state != WakeupState.PrimaryCandidate && _state != WakeupState.Monitoring)
+                return;
+
+            _isProcessing = true;
+            _state = WakeupState.VerifyingSpeaker;
+            EmitStatus("声纹确认中…");
+            try
+            {
+                _logInfo($"KWS stage2 confirm: {modelName} score={score:F3}");
+
+                var audio = _audioCapture.GetRecentAudio(3.0f);
+                if (audio == null && _commandPreroll.Count > 0)
+                    audio = _commandPreroll.ToArray();
+                if (audio != null)
+                {
+                    audio = AudioProcessing.ExtractSpeechSegment(
+                        audio, _settings.SampleRate, _settings.Channels,
+                        targetSeconds: 1.6f, minSeconds: 0.5f, maxSeconds: 2.8f);
+                }
+
+                VoiceprintVerificationResult result;
+                bool needVp = _settings.EnableVoiceprintVerification
+                              && _recognizer.GetRegisteredVoiceprints().Count > 0;
+
+                if (needVp && audio != null && audio.Length >= _settings.SampleRate)
+                {
+                    result = await Task.Run(() => _recognizer.Verify(audio, _settings.WakeupVoiceprintThreshold));
+                    _logInfo($"speaker gate ok={result.IsVerified} cos={result.Similarity:F3} thr={_settings.WakeupVoiceprintThreshold:F3} user={result.MatchedUserId}");
+                    if (!result.IsVerified)
+                    {
+                        EmitStatus("声纹未通过");
+                        _state = WakeupState.Cooldown;
+                        await Task.Delay(400);
+                        ResetKwsCandidate();
+                        _state = WakeupState.Monitoring;
+                        EmitStatus("监听中");
+                        return;
+                    }
+                }
+                else
+                {
+                    result = new VoiceprintVerificationResult
+                    {
+                        IsVerified = true,
+                        Confidence = score,
+                        Similarity = score,
+                        MatchedUserId = modelName
+                    };
+                }
+
+                EnterCommandListening(result);
+            }
+            catch (Exception ex)
+            {
+                _logInfo("confirm failed: " + ex.Message);
+                ResetKwsCandidate();
+                _state = WakeupState.Monitoring;
+                EmitStatus("监听中");
+            }
+            finally
+            {
+                _isProcessing = false;
+            }
+        }
+
+        private void EnterCommandListening(VoiceprintVerificationResult result)
+        {
+            _lastWakeupTime = DateTime.Now;
+            _pendingResult = result;
+            ResetVadState();
+
+            if (_commandPreroll.Count > 0)
+            {
+                int keep = (int)(_settings.SampleRate * 2 * Math.Max(0.15f, _settings.CommandPrerollSeconds));
+                var seed = _commandPreroll.Skip(Math.Max(0, _commandPreroll.Count - keep)).ToArray();
+                _speechBuffer.Clear();
+                _speechBuffer.AddRange(seed);
+                _isSpeaking = true;
+                _speechChunks = 1;
+                _silenceChunks = 0;
+                _recordingStopwatch.Restart();
+            }
+
+            _state = WakeupState.AwaitingCommand;
+            _commandTimer?.Dispose();
+            int timeoutMs = (int)(_settings.DictationTimeout * 1000);
+            _commandTimer = new Timer(_ => OnCommandTimeout(), null, timeoutMs, Timeout.Infinite);
+            EmitStatus("请说指令…");
+            DictationStarted?.Invoke();
+            _logInfo("pipeline: awaiting command");
+        }
+
         private async Task ProcessMonitoringPhase(byte[] audioData, Stopwatch sw)
         {
-            // 冷却期检查
-            var timeSinceLastWakeup = (DateTime.Now - _lastWakeupTime).TotalSeconds;
-            if (timeSinceLastWakeup < _settings.WakeupCooldown)
+            // custom path (non-OWW): voiceprint + DTW/ASR text wake word
+            if ((DateTime.Now - _lastWakeupTime).TotalSeconds < _settings.WakeupCooldown)
             {
-                _logDebug($"冷却期中 (剩余 {_settings.WakeupCooldown - timeSinceLastWakeup:F1}s)，丢弃");
+                _logDebug("cooldown drop");
                 return;
             }
 
-            // 并行执行声纹验证和 ASR 转写
-            var verifyTask = Task.Run(() => _recognizer.Verify(audioData, _settings.WakeupVoiceprintThreshold));
-            var asrTask = TranscribeAudio(audioData);
+            var speech = AudioProcessing.ExtractSpeechSegment(
+                audioData, _settings.SampleRate, _settings.Channels,
+                targetSeconds: 1.8f, minSeconds: 0.5f, maxSeconds: 3.0f);
 
-            await Task.WhenAll(verifyTask, asrTask);
+            var result = await Task.Run(() => _recognizer.Verify(speech, _settings.WakeupVoiceprintThreshold));
+            _logInfo($"voiceprint {(result.IsVerified ? "ok" : "fail")} cos={result.Similarity:F3}");
+            if (!result.IsVerified) return;
 
-            var result = verifyTask.Result;
-            var asrText = asrTask.Result ?? "";
+            bool wakeMatched = false;
+            string matchedWakeWord = null;
+            float dtwScore = 0f;
 
-            _logInfo($"声纹验证: {(result.IsVerified ? "通过" : "未通过")} (置信度: {result.Confidence:P1})");
-            _logInfo($"ASR 识别: \"{asrText}\"");
-            _logDebug($"并行处理耗时: {sw.ElapsedMilliseconds}ms");
-
-            // 检查声纹
-            if (!result.IsVerified)
+            var matchedVp = _recognizer.GetRegisteredVoiceprints()
+                .FirstOrDefault(v => v.UserId == result.MatchedUserId);
+            var envelopes = matchedVp?.WakeWordEnvelopes;
+            if (envelopes != null && envelopes.Count > 0)
             {
-                _logDebug("声纹未通过，继续监听");
+                dtwScore = await Task.Run(() => _wakeWordDetector.Match(speech, envelopes, _settings.SampleRate));
+                _logInfo($"DTW {dtwScore:F3} thr={_settings.WakeWordThreshold:F3}");
+                if (dtwScore >= _settings.WakeWordThreshold)
+                {
+                    wakeMatched = true;
+                    matchedWakeWord = matchedVp.UserName;
+                }
+            }
+
+            string asrText = "";
+            if (!wakeMatched)
+            {
+                asrText = await TranscribeAudio(speech) ?? "";
+                _logInfo($"ASR \"{asrText}\"");
+                matchedWakeWord = FindWakeWord(asrText);
+                if (matchedWakeWord != null)
+                {
+                    wakeMatched = true;
+                    _logInfo("ASR wake word: " + matchedWakeWord);
+                }
+            }
+
+            if (!wakeMatched)
+            {
+                _logInfo($"no wake word (DTW={dtwScore:F3})");
                 return;
             }
 
-            // 检查 ASR 文本是否包含唤醒词
-            string matchedWakeWord = FindWakeWord(asrText);
-            if (matchedWakeWord == null)
-            {
-                _logInfo($"ASR 文本不包含唤醒词，继续监听 (唤醒词: {string.Join(", ", _wakeWords)})");
-                return;
-            }
-
-            _logInfo($"唤醒词匹配: \"{matchedWakeWord}\" (耗时: {sw.ElapsedMilliseconds}ms)");
-            _lastWakeupTime = DateTime.Now;
-
-            // 提取唤醒词之后的指令文本
-            string commandText = ExtractCommandAfterWakeWord(asrText, matchedWakeWord);
+            string commandText = null;
+            if (!string.IsNullOrWhiteSpace(asrText) && matchedWakeWord != null)
+                commandText = ExtractCommandAfterWakeWord(asrText, matchedWakeWord);
 
             if (!string.IsNullOrWhiteSpace(commandText))
             {
-                // 用户在同一句中说了唤醒词 + 指令
-                _logInfo($"唤醒成功（含指令）: \"{commandText}\"");
+                _lastWakeupTime = DateTime.Now;
+                _logInfo("wake+command: " + commandText);
                 WakeupDetected?.Invoke(commandText, result);
             }
             else
             {
-                // 用户只说了唤醒词，等待指令
-                _logInfo("唤醒成功，等待指令...");
-                _pendingResult = result;
-                _state = WakeupState.AwaitingCommand;
-
-                // 启动指令超时计时器
-                _commandTimer?.Dispose();
-                int timeoutMs = (int)(_settings.DictationTimeout * 1000);
-                _commandTimer = new Timer(
-                    _ => OnCommandTimeout(),
-                    null,
-                    timeoutMs,
-                    Timeout.Infinite);
-
-                DictationStarted?.Invoke();
+                // seed preroll from this segment tail
+                _commandPreroll.Clear();
+                _commandPreroll.AddRange(speech);
+                EnterCommandListening(result);
             }
         }
 
-        /// <summary>
-        /// 指令阶段：ASR 转写指令文本
-        /// </summary>
         private async Task ProcessCommandPhase(byte[] audioData, Stopwatch sw)
         {
             _commandTimer?.Dispose();
             _commandTimer = null;
 
-            _logInfo("指令阶段: 正在 ASR 转写...");
-            var text = await TranscribeAudio(audioData);
-            _logInfo($"指令 ASR 结果: \"{text}\" (耗时: {sw.ElapsedMilliseconds}ms)");
+            _state = WakeupState.Transcribing;
+            EmitStatus("识别中…");
+            _logInfo("command ASR...");
 
-            _state = WakeupState.Monitoring;
+            var cmdAudio = AudioProcessing.TrimSilence(audioData, _settings.SampleRate, _settings.Channels);
+            var text = await TranscribeAudio(cmdAudio);
+            _logInfo($"command ASR \"{text}\" {sw.ElapsedMilliseconds}ms");
+
+            ResetKwsCandidate();
+            _state = WakeupState.Cooldown;
+            EmitStatus("冷却中");
 
             if (!string.IsNullOrWhiteSpace(text))
-            {
                 WakeupDetected?.Invoke(text, _pendingResult);
-            }
             else
             {
-                _logInfo("指令为空，回到监听状态");
+                _logInfo("empty command");
                 DictationEnded?.Invoke();
             }
 
             _pendingResult = null;
+            _ = Task.Run(async () =>
+            {
+                await Task.Delay(Math.Max(200, (int)(_settings.WakeupCooldown * 500)));
+                if (_state == WakeupState.Cooldown)
+                {
+                    _state = WakeupState.Monitoring;
+                    EmitStatus("监听中");
+                }
+            });
         }
 
-        /// <summary>
-        /// 指令超时
-        /// </summary>
         private void OnCommandTimeout()
         {
-            _logInfo("指令等待超时，回到监听状态");
+            _logInfo("command timeout");
             _commandTimer?.Dispose();
             _commandTimer = null;
+            ResetKwsCandidate();
             _state = WakeupState.Monitoring;
             _pendingResult = null;
+            EmitStatus("监听中");
             DictationEnded?.Invoke();
         }
 
-        /// <summary>
-        /// 统一 ASR 转写：优先本地 Whisper，回退外部 API
-        /// </summary>
         private async Task<string> TranscribeAudio(byte[] audioData)
         {
-            // 优先使用本地 Whisper ONNX（离线，无需网络）
             if (_localAsr != null && _localAsr.IsInitialized)
             {
                 try
                 {
-                    _logDebug("使用本地 Whisper 转写...");
                     var text = await _localAsr.TranscribeAsync(audioData);
-                    if (!string.IsNullOrWhiteSpace(text))
-                        return text;
-                    _logDebug("本地 Whisper 返回空结果");
+                    if (!string.IsNullOrWhiteSpace(text)) return text;
                 }
                 catch (Exception ex)
                 {
-                    _logInfo($"本地 Whisper 转写失败: {ex.Message}");
+                    _logInfo("local ASR fail: " + ex.Message);
                 }
             }
 
-            // 回退到外部 ASR API
             if (_externalAsr != null && !string.IsNullOrWhiteSpace(_settings.AsrApiUrl))
             {
                 try
                 {
-                    _logDebug("使用外部 ASR 转写...");
                     return await _externalAsr.TranscribeAsync(audioData);
                 }
                 catch (Exception ex)
                 {
-                    _logInfo($"外部 ASR 转写失败: {ex.Message}");
+                    _logInfo("external ASR fail: " + ex.Message);
                 }
             }
-
-            _logDebug("无可用 ASR 服务");
             return null;
         }
 
-        /// <summary>
-        /// 在 ASR 文本中查找唤醒词
-        /// </summary>
+        private void EnsureOpenWakeWord()
+        {
+            if (!_settings.UseOpenWakeWord)
+            {
+                _oww?.Dispose();
+                _oww = null;
+                return;
+            }
+
+            string dir = _settings.OpenWakeWordModelDir ?? "openwakeword";
+            if (!Path.IsPathRooted(dir) && !string.IsNullOrEmpty(_modelsPath))
+                dir = Path.Combine(_modelsPath, dir);
+
+            if (_oww != null && _oww.IsInitialized)
+                return;
+
+            _oww?.Dispose();
+            _oww = new OpenWakeWordEngine(_logInfo, _logDebug);
+
+            string[] files = null;
+            if (!string.IsNullOrWhiteSpace(_settings.OpenWakeWordModelFile))
+                files = new[] { _settings.OpenWakeWordModelFile };
+
+            if (!_oww.Initialize(dir, files))
+            {
+                _logInfo("openWakeWord init failed; fallback custom VAD path");
+                _oww.Dispose();
+                _oww = null;
+            }
+        }
+
         private string FindWakeWord(string text)
         {
-            if (string.IsNullOrEmpty(text))
-                return null;
-
+            if (string.IsNullOrEmpty(text)) return null;
             foreach (var wakeWord in _wakeWords)
             {
                 if (text.Contains(wakeWord))
@@ -469,30 +659,19 @@ namespace VPet.Plugin.VoiceprintRecognition
             return null;
         }
 
-        /// <summary>
-        /// 提取唤醒词之后的指令文本
-        /// </summary>
         private string ExtractCommandAfterWakeWord(string text, string wakeWord)
         {
             int idx = text.IndexOf(wakeWord);
             if (idx < 0) return null;
-
             string after = text.Substring(idx + wakeWord.Length).Trim();
-
-            // 去除常见的标点符号
-            after = after.TrimStart('，', ',', '。', '.', '！', '!', '？', '?', ' ');
-
+            after = after.TrimStart(',', '.', '!', '?', ' ', '，', '。', '！', '？');
             return string.IsNullOrWhiteSpace(after) ? null : after;
         }
 
-        /// <summary>
-        /// 计算音频块的 RMS 能量
-        /// </summary>
         private static float ComputeRms(byte[] audioChunk)
         {
             int sampleCount = audioChunk.Length / 2;
             if (sampleCount == 0) return 0;
-
             double sumSquares = 0;
             for (int i = 0; i < sampleCount; i++)
             {
@@ -500,7 +679,6 @@ namespace VPet.Plugin.VoiceprintRecognition
                 float normalized = sample / 32768.0f;
                 sumSquares += normalized * normalized;
             }
-
             return (float)Math.Sqrt(sumSquares / sampleCount);
         }
     }

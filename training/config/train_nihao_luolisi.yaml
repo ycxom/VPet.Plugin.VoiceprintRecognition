@@ -1,0 +1,33 @@
+model_name: nihao_luolisi
+manifest_paths:
+  - data/meta/manifest.jsonl
+  - data/windows_tts_v2/manifest.jsonl
+feature_model_dir: ../1103_VoiceprintRecognition/models/openwakeword
+output_dir: output/nihao_luolisi
+deploy_model_path: ../1103_VoiceprintRecognition/models/openwakeword/nihao_luolisi.onnx
+
+# Hold complete TTS voices out before augmentation to avoid source leakage.
+validation_voices:
+  - "苏打"
+test_voices:
+  - "白桦"
+
+sample_rate: 16000
+clip_samples: 32000
+n_feature_frames: 16
+embedding_dim: 96
+views_per_training_clip: 8
+synthetic_negative_count: 512
+max_active_seconds: 3.0
+
+seed: 20260814
+hidden_size: 32
+batch_size: 64
+learning_rate: 0.001
+weight_decay: 0.0001
+max_epochs: 150
+early_stopping_patience: 20
+
+# The implementation follows this official openWakeWord revision, but avoids its
+# Piper/TensorFlow training extras and fixes the deployed head shape at [16, 96].
+openwakeword_reference_commit: 368c03716d1e92591906a84949bc477f3a834455

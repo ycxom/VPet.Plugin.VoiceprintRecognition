@@ -19,9 +19,14 @@ namespace VPet.Plugin.VoiceprintRecognition
         public bool IsVerified { get; set; }
 
         /// <summary>
-        /// 置信度 (0-1)
+        /// 显示用置信度 (0-1)，由余弦 (sim+1)/2 映射。与阈值不是同一标度。
         /// </summary>
         public float Confidence { get; set; }
+
+        /// <summary>
+        /// 原始余弦相似度（与 VoiceprintThreshold / WakeupVoiceprintThreshold 同一标度）
+        /// </summary>
+        public float Similarity { get; set; }
 
         /// <summary>
         /// 匹配的用户 ID（如果有多用户）
@@ -50,9 +55,14 @@ namespace VPet.Plugin.VoiceprintRecognition
         public string UserName { get; set; }
 
         /// <summary>
-        /// 特征向量
+        /// 特征向量（多样本时为平均向量）
         /// </summary>
         public float[] Embedding { get; set; }
+
+        /// <summary>
+        /// 多样本注册保留的各次 embedding，验证时取最大相似度
+        /// </summary>
+        public List<float[]> SampleEmbeddings { get; set; } = new List<float[]>();
 
         /// <summary>
         /// 唤醒词能量包络（用于 DTW 模式匹配）
@@ -406,36 +416,75 @@ namespace VPet.Plugin.VoiceprintRecognition
                     {
                         IsVerified = false,
                         Confidence = 0,
+                        Similarity = 0,
                         Error = "没有注册的声纹"
                     };
                 }
 
-                // 提取当前音频的声纹特征
-                var currentEmbedding = ExtractEmbedding(audioData);
+                if (audioData == null || audioData.Length < _settings.SampleRate)
+                {
+                    return new VoiceprintVerificationResult
+                    {
+                        IsVerified = false,
+                        Confidence = 0,
+                        Similarity = 0,
+                        Error = "音频数据不足"
+                    };
+                }
 
-                // 与所有注册的声纹比较
+                // 裁出语音核心段，避免长静音稀释 embedding
+                var prepared = AudioProcessing.ExtractSpeechSegment(
+                    audioData,
+                    _settings.SampleRate,
+                    _settings.Channels,
+                    targetSeconds: 1.8f,
+                    minSeconds: 0.6f,
+                    maxSeconds: 3.0f);
+                float rawDur = AudioProcessing.DurationSeconds(audioData, _settings.SampleRate, _settings.Channels);
+                float prepDur = AudioProcessing.DurationSeconds(prepared, _settings.SampleRate, _settings.Channels);
+                if (Math.Abs(rawDur - prepDur) > 0.05f)
+                    _logDebug($"声纹验证音频裁剪: {rawDur:F2}s -> {prepDur:F2}s");
+
+                var currentEmbedding = ExtractEmbedding(prepared);
+
                 float maxSimilarity = float.MinValue;
                 string matchedUserId = null;
 
                 foreach (var registered in _registeredVoiceprints)
                 {
-                    var similarity = ComputeSimilarity(currentEmbedding, registered.Embedding);
-
-                    if (similarity > maxSimilarity)
+                    void Consider(float[] emb)
                     {
-                        maxSimilarity = similarity;
-                        matchedUserId = registered.UserId;
+                        if (emb == null || emb.Length == 0) return;
+                        var similarity = ComputeSimilarity(currentEmbedding, emb);
+                        if (similarity > maxSimilarity)
+                        {
+                            maxSimilarity = similarity;
+                            matchedUserId = registered.UserId;
+                        }
+                    }
+
+                    Consider(registered.Embedding);
+                    if (registered.SampleEmbeddings != null)
+                    {
+                        foreach (var sample in registered.SampleEmbeddings)
+                            Consider(sample);
                     }
                 }
 
-                // 判断是否通过阈值
+                if (maxSimilarity == float.MinValue)
+                    maxSimilarity = -1f;
+
                 float threshold = thresholdOverride ?? _settings.VoiceprintThreshold;
                 bool isVerified = maxSimilarity >= threshold;
+                float displayConfidence = Math.Max(0, Math.Min(1, (maxSimilarity + 1) / 2));
+
+                _logDebug($"声纹比对: 余弦={maxSimilarity:F3}, 阈值={threshold:F3}, 显示置信度={displayConfidence:P1}, 通过={isVerified}");
 
                 return new VoiceprintVerificationResult
                 {
                     IsVerified = isVerified,
-                    Confidence = Math.Max(0, Math.Min(1, (maxSimilarity + 1) / 2)), // 转换到 [0, 1]
+                    Confidence = displayConfidence,
+                    Similarity = maxSimilarity,
                     MatchedUserId = isVerified ? matchedUserId : null
                 };
             }
@@ -445,6 +494,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                 {
                     IsVerified = false,
                     Confidence = 0,
+                    Similarity = 0,
                     Error = ex.Message
                 };
             }
@@ -505,12 +555,15 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 _logInfo($"多样本注册: {userName}, {audioSamples.Count} 个样本");
 
-                // 提取每个样本的嵌入向量
+                // 提取每个样本的嵌入向量（先裁语音核心段）
                 var embeddings = new List<float[]>();
                 for (int i = 0; i < audioSamples.Count; i++)
                 {
                     _logDebug($"提取样本 {i + 1}/{audioSamples.Count} 的声纹特征...");
-                    var emb = ExtractEmbedding(audioSamples[i]);
+                    var trimmed = AudioProcessing.ExtractSpeechSegment(
+                        audioSamples[i], _settings.SampleRate, _settings.Channels,
+                        targetSeconds: 2.0f, minSeconds: 0.7f, maxSeconds: 4.0f);
+                    var emb = ExtractEmbedding(trimmed);
                     embeddings.Add(emb);
                 }
 
@@ -543,6 +596,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                     UserId = userId,
                     UserName = userName,
                     Embedding = avgEmbedding,
+                    SampleEmbeddings = embeddings,
                     WakeWordEnvelopes = wakeWordEnvelopes ?? new List<WakeWordEnvelope>(),
                     CreatedAt = DateTime.Now
                 };

@@ -1,0 +1,7 @@
+# Kept separate from requirements.txt so the MiMo data-generation environment stays small.
+# Python 3.11 x64 is recommended; these versions also match the plugin's ONNX Runtime generation.
+numpy==1.26.4
+onnx==1.15.0
+onnxruntime==1.16.3
+PyYAML==6.0.2
+torch==2.2.2

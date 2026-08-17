@@ -1,0 +1,100 @@
+# MiMo TTS dataset config for openWakeWord-style general KWS training
+# Docs: https://mimo.mi.com/docs/zh-CN/quick-start/usage-guide/audio/speech-synthesis-v2.5
+
+project_name: nihao_luolisi
+target_sample_rate: 16000
+audio_format: wav  # API returns wav; we re-encode to 16k mono PCM
+
+# Target wake phrases (positives)
+positive_texts:
+  - "你好萝莉丝"
+  - "你好 萝莉丝"
+  - "您好萝莉丝"
+  - "嗨，萝莉丝"
+  - "萝莉丝"
+  - "喂，萝莉丝"
+
+# Hard negatives (near-miss + everyday speech)
+negative_texts:
+  - "你好啊"
+  - "你好朋友"
+  - "你好小爱"
+  - "你好 Siri"
+  - "今天天气怎么样"
+  - "打开空调"
+  - "我想听歌"
+  - "帮我设个闹钟"
+  - "萝莉很可爱"
+  - "丝毫不在意"
+  - "你好罗理事"
+  - "你号萝莉丝"
+  - "嗯"
+  - "好的"
+  - "在吗"
+  - "Hey Jane"
+  - "Hey Jarvis"
+  - "Hey Mycroft"
+  - "Alexa"
+
+# Preset voices from MiMo docs (Chinese preferred for this wake word)
+voices:
+  - "冰糖"
+  - "茉莉"
+  - "苏打"
+  - "白桦"
+  - "mimo_default"
+
+# Natural-language style prompts -> role:user content
+# Keep diverse speed/emotion/distance-like delivery for generalization
+style_prompts:
+  - "用自然清晰的普通话，中等语速，像叫智能助手的名字，吐字清楚。"
+  - "语速稍快，语气轻松活泼，像跟桌宠打招呼。"
+  - "语速稍慢，吐字用力、清楚，适合远一点对着麦克风。"
+  - "声音轻一点、柔和，但每个字都听得清。"
+  - "稍微提高音量，干脆利落，不要拖音。"
+  - "平静冷静，几乎无情绪，像日常随口一喊。"
+  - "带着一点笑意，轻松上扬，但不要夸张表演。"
+  - "略显着急，语速偏快，像要马上让助手听见。"
+
+# Optional tag styles embedded at start of assistant text: (风格)文本
+tag_styles:
+  - ""
+  - "(平静)"
+  - "(活泼)"
+  - "(温柔)"
+  - "(严肃)"
+  - "(兴奋)"
+
+# How many samples to generate
+# total positives roughly = len(texts)*len(voices)*samples_per_combo (capped by max_*)
+samples_per_positive_combo: 1
+samples_per_negative_combo: 1
+max_positive: 200
+max_negative: 200
+sampling_seed: 20260814
+
+# API
+model: mimo-v2.5-tts
+request_timeout_sec: 120
+
+# ---- Rate limit (protect API key from throttling) ----
+# Hard minimum gap between two HTTP requests
+min_interval_sec: 1.5
+# Sliding-window max requests in any 60s
+requests_per_minute: 20
+# Optional hourly cap (0 = disabled)
+max_requests_per_hour: 600
+# Legacy alias still read if min_interval_sec absent
+sleep_between_requests_sec: 1.5
+max_retries: 6
+# Backoff when server returns 429 / rate limit
+rate_limit_backoff_base_sec: 10
+rate_limit_backoff_max_sec: 120
+# Abort job after N consecutive rate-limit failures (partial progress kept)
+stop_on_repeated_rate_limit: true
+max_consecutive_rate_limits: 5
+
+# Output layout under training/data
+output_positive_dir: data/positive
+output_negative_dir: data/negative
+manifest_path: data/meta/manifest.jsonl

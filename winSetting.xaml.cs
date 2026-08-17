@@ -135,6 +135,8 @@ namespace VPet.Plugin.VoiceprintRecognition
             CheckWakeupAutoSend.IsChecked = _settings.WakeupAutoSend;
             SliderWakeupCooldown.Value = _settings.WakeupCooldown;
             SliderWakeWordThreshold.Value = _settings.WakeWordThreshold;
+                if (SliderWakeupVoiceprint != null)
+                    SliderWakeupVoiceprint.Value = _settings.WakeupVoiceprintThreshold;
 
             // 唤醒模式选择
             if (_settings.UseWindowsSpeech)
@@ -756,11 +758,52 @@ namespace VPet.Plugin.VoiceprintRecognition
                 _settings.WakeWordThreshold = (float)SliderWakeWordThreshold.Value;
         }
 
+        private void SliderWakeupVoiceprint_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings == null || SliderWakeupVoiceprint == null) return;
+            _settings.WakeupVoiceprintThreshold = (float)SliderWakeupVoiceprint.Value;
+        }
+
+
         private void RadioWakeMode_Changed(object sender, RoutedEventArgs e)
         {
             if (_settings == null) return;
-            _settings.UseWindowsSpeech = RadioWindowsSpeech.IsChecked == true;
+            bool useWin = RadioWindowsSpeech.IsChecked == true;
+            bool useOww = RadioOpenWakeWord != null && RadioOpenWakeWord.IsChecked == true;
+            _settings.UseWindowsSpeech = useWin;
+            _settings.UseOpenWakeWord = useOww && !useWin;
             UpdateWakeModeVisibility();
+        }
+
+        private void SliderOpenWakeWord_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings == null || SliderOpenWakeWord == null) return;
+            _settings.OpenWakeWordThreshold = (float)SliderOpenWakeWord.Value;
+        }
+
+        private void SliderOpenWakeWordSoft_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings == null || SliderOpenWakeWordSoft == null) return;
+            _settings.OpenWakeWordSoftThreshold = (float)SliderOpenWakeWordSoft.Value;
+        }
+
+        private void SliderOpenWakeWordPatience_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+        {
+            if (_settings == null || SliderOpenWakeWordPatience == null) return;
+            _settings.OpenWakeWordPatienceFrames = (int)SliderOpenWakeWordPatience.Value;
+        }
+
+        private void CheckAssistantPipeline_Changed(object sender, RoutedEventArgs e)
+        {
+            if (_settings == null || CheckAssistantPipeline == null) return;
+            _settings.UseAssistantPipeline = CheckAssistantPipeline.IsChecked == true;
+        }
+
+
+        private void TextOpenWakeWordFile_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_settings == null || TextOpenWakeWordFile == null) return;
+            _settings.OpenWakeWordModelFile = TextOpenWakeWordFile.Text?.Trim() ?? "";
         }
 
         private void SliderWinSpeechConfidence_ValueChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -794,7 +837,12 @@ namespace VPet.Plugin.VoiceprintRecognition
             GroupCustomMode.Visibility = useWindowsSpeech ? Visibility.Collapsed : Visibility.Visible;
             GroupExternalAsr.Visibility = useWindowsSpeech ? Visibility.Collapsed : Visibility.Visible;
             GroupWindowsSpeech.Visibility = useWindowsSpeech ? Visibility.Visible : Visibility.Collapsed;
+        
+            if (PanelOpenWakeWord != null)
+                PanelOpenWakeWord.Visibility = (_settings != null && _settings.UseOpenWakeWord)
+                    ? Visibility.Visible : Visibility.Collapsed;
         }
+
 
         private void TextAsrApiUrl_TextChanged(object sender, TextChangedEventArgs e)
         {

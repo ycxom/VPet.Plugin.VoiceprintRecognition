@@ -336,14 +336,25 @@ namespace VPet.Plugin.VoiceprintRecognition
         {
             _logInfo($"WindowsSpeech: [{source}] 检测到唤醒词 \"{wakeWord}\"，原文: \"{fullText}\"");
 
-            // 声纹验证（取最近 5 秒音频，确保包含完整唤醒词语音）
-            var audioData = _audioCapture.GetRecentAudio(5.0f);
+            // 声纹验证：取最近音频并裁出语音核心段（固定 5 秒会混入静音导致相似度暴跌）
+            var audioData = _audioCapture.GetRecentAudio(4.0f);
             VoiceprintVerificationResult verifyResult = null;
 
-            if (audioData != null && audioData.Length >= 16000 * 2)
+            if (audioData != null && audioData.Length >= _settings.SampleRate) // >=0.5s
             {
-                verifyResult = _recognizer.Verify(audioData, _settings.WakeupVoiceprintThreshold);
-                _logInfo($"WindowsSpeech: 声纹验证 - 通过={verifyResult.IsVerified}, 用户={verifyResult.MatchedUserId}, 置信度={verifyResult.Confidence:P1}");
+                var speech = AudioProcessing.ExtractSpeechSegment(
+                    audioData,
+                    _settings.SampleRate,
+                    _settings.Channels,
+                    targetSeconds: 1.6f,
+                    minSeconds: 0.5f,
+                    maxSeconds: 2.8f);
+                float rawDur = AudioProcessing.DurationSeconds(audioData, _settings.SampleRate, _settings.Channels);
+                float speechDur = AudioProcessing.DurationSeconds(speech, _settings.SampleRate, _settings.Channels);
+                _logDebug($"WindowsSpeech: 唤醒音频裁剪 {rawDur:F2}s -> {speechDur:F2}s");
+
+                verifyResult = _recognizer.Verify(speech, _settings.WakeupVoiceprintThreshold);
+                _logInfo($"WindowsSpeech: 声纹验证 - 通过={verifyResult.IsVerified}, 用户={verifyResult.MatchedUserId}, 余弦={verifyResult.Similarity:F3}, 阈值={_settings.WakeupVoiceprintThreshold:F3}, 显示置信度={verifyResult.Confidence:P1}");
 
                 if (!verifyResult.IsVerified)
                 {

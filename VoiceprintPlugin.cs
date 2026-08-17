@@ -472,6 +472,7 @@ namespace VPet.Plugin.VoiceprintRecognition
                     WakeupService.WakeupDetected -= OnWakeupDetected;
                     WakeupService.DictationStarted -= OnDictationStarted;
                     WakeupService.DictationEnded -= OnDictationEnded;
+                    WakeupService.StatusChanged -= OnWakeupStatusChanged;
                 }
 
                 // 如果使用 Windows 语音模式，不初始化自定义唤醒服务
@@ -501,10 +502,12 @@ namespace VPet.Plugin.VoiceprintRecognition
 
                 WakeupService = new VoiceWakeupService(Settings, Recognizer, AudioCapture,
                     localAsr: SpeechToText, externalAsr: ExternalAsr,
-                    logInfo: LogMessage, logDebug: LogDebug);
+                    logInfo: LogMessage, logDebug: LogDebug,
+                    modelsPath: ModelsPath);
                 WakeupService.WakeupDetected += OnWakeupDetected;
                 WakeupService.DictationStarted += OnDictationStarted;
                 WakeupService.DictationEnded += OnDictationEnded;
+                WakeupService.StatusChanged += OnWakeupStatusChanged;
 
                 // 如果已启用且有注册声纹，自动开始监听
                 if (Settings.EnableWakeup && Recognizer.GetRegisteredVoiceprints().Count > 0)
@@ -595,6 +598,19 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// <summary>
         /// 听写开始回调 - 弹窗提示用户说话
         /// </summary>
+        private void OnWakeupStatusChanged(string status)
+        {
+            try
+            {
+                Application.Current?.Dispatcher?.Invoke(() =>
+                {
+                    if (_wakeupPopupText != null)
+                        _wakeupPopupText.Text = status ?? string.Empty;
+                });
+            }
+            catch { }
+        }
+
         private void OnDictationStarted()
         {
             try
@@ -753,7 +769,7 @@ namespace VPet.Plugin.VoiceprintRecognition
         {
             try
             {
-                LogMessage($"唤醒触发 - 用户: {result.MatchedUserId}, 置信度: {result.Confidence:P1}, 文字: {text}");
+                LogMessage($"唤醒触发 - 用户: {result?.MatchedUserId}, 余弦: {result?.Similarity:F3}, 显示置信度: {result?.Confidence:P1}, 文字: {text}");
 
                 Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
 
@@ -777,7 +793,7 @@ namespace VPet.Plugin.VoiceprintRecognition
             {
                 var userId = result?.MatchedUserId ?? "未知";
                 var confidence = result?.Confidence ?? 0;
-                LogMessage($"Windows 语音回退 - 用户: {userId}, 声纹置信度: {confidence:P1}, 文字: {text}");
+                LogMessage($"Windows 语音回退 - 用户: {userId}, 余弦: {result?.Similarity:F3}, 显示置信度: {confidence:P1}, 文字: {text}");
 
                 Application.Current.Dispatcher.Invoke(() => CloseWakeupPopup());
 
