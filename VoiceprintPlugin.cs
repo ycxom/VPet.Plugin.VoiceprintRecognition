@@ -134,6 +134,16 @@ namespace VPet.Plugin.VoiceprintRecognition
         /// 注册程序集解析器并预加载运行时 DLL
         /// System.Speech NuGet 包的根目录 DLL 是平台检测 stub，真正的 Windows 实现在 runtimes\ 子目录
         /// </summary>
+        /// <summary>
+        /// 本插件自己携带、允许由下面的 Resolving 处理器解析的程序集简单名。
+        /// 白名单之外的一律返回 null，交还运行时的正常解析流程。
+        /// </summary>
+        private static readonly HashSet<string> OwnedAssemblies = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "System.Speech",
+            "Microsoft.ML.OnnxRuntime",
+        };
+
         private void RegisterAssemblyResolver()
         {
             var pluginDir = Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location);
@@ -165,18 +175,34 @@ namespace VPet.Plugin.VoiceprintRecognition
                 Assembly.GetExecutingAssembly()) ?? System.Runtime.Loader.AssemblyLoadContext.Default;
             loadCtx.Resolving += (context, assemblyName) =>
             {
-                var dllPath = Path.Combine(runtimesDir, assemblyName.Name + ".dll");
-                if (File.Exists(dllPath))
-                {
-                    LogDebug($"程序集解析 (runtimes): {assemblyName.Name} -> {dllPath}");
-                    return context.LoadFromAssemblyPath(dllPath);
-                }
+                // 只处理本插件自己的依赖。
+                // 这个 Resolving 挂在 AssemblyLoadContext.Default 上，是**进程级**的：
+                // 不加白名单的话，宿主和其它所有 mod 的每一次程序集解析失败都会落到这里，
+                // 一旦本插件目录里出现同名 DLL，就会把别人的依赖劫持成版本不匹配的程序集，
+                // 表现为 FileLoadException 0x80131621，且极难定位到是本插件造成的。
+                if (assemblyName?.Name is null || !OwnedAssemblies.Contains(assemblyName.Name))
+                    return null;
 
-                dllPath = Path.Combine(pluginDir, assemblyName.Name + ".dll");
-                if (File.Exists(dllPath))
+                try
                 {
-                    LogDebug($"程序集解析: {assemblyName.Name} -> {dllPath}");
-                    return context.LoadFromAssemblyPath(dllPath);
+                    var dllPath = Path.Combine(runtimesDir, assemblyName.Name + ".dll");
+                    if (File.Exists(dllPath))
+                    {
+                        LogDebug($"程序集解析 (runtimes): {assemblyName.Name} -> {dllPath}");
+                        return context.LoadFromAssemblyPath(dllPath);
+                    }
+
+                    dllPath = Path.Combine(pluginDir, assemblyName.Name + ".dll");
+                    if (File.Exists(dllPath))
+                    {
+                        LogDebug($"程序集解析: {assemblyName.Name} -> {dllPath}");
+                        return context.LoadFromAssemblyPath(dllPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // 从 Resolving 里抛出去会污染调用方的加载异常，让真正的原因更难查
+                    LogMessage($"解析程序集 {assemblyName.Name} 失败: {ex.GetType().Name}: {ex.Message}");
                 }
                 return null;
             };
